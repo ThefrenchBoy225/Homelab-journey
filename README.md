@@ -18,6 +18,13 @@ Certifications prove knowledge — this repo proves I can actually *do* the work
 - [Journal](./journal.md) — chronological log of what I built, issues I hit, and how I solved them
 - More sections (network diagrams, write-ups, scripts) will be added as the lab grows
 
+## Screenshots
+![Ubuntu Login](./screenshots/Ubuntu-login.webp)
+*Ubuntu 26.04 LTS running as a VM in UTM on Apple Silicon*
+
+![Terminal Practice](./screenshots/terminal-Commands.webp)
+*Practicing basic Linux CLI commands: mkdir, cd, touch, ls*
+
 ## Roadmap
 - [x] Set up hypervisor (UTM)
 - [x] Install first Linux VM (Ubuntu Server)
