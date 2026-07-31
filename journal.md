@@ -33,6 +33,10 @@ A running log of what I've built, broken, and learned along the way.
 
 ---
 
+Entry 2 — July 30, 2026: SSH Remote Access
+
+Goal: Set up SSH so I can control my Ubuntu VM remotely from my Mac's terminal instead of the UTM window.
+
 What I did:
 
 - Installed the OpenSSH server on my Ubuntu VM: `sudo apt install openssh-server`
