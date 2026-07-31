@@ -39,15 +39,15 @@ Goal: Set up SSH so I can control my Ubuntu VM remotely from my Mac's terminal i
 
 What I did:
 
-Installed the OpenSSH server on my Ubuntu VM: sudo apt install openssh-server
-Discovered the service was installed but disabled by default — started and enabled it with sudo systemctl start ssh and sudo systemctl enable ssh
-Verified it was running with sudo systemctl status ssh (confirmed active (running))
-Found my VM's internal IP address using ip addr (identified the correct network interface, enp0s1, vs. the loopback interface lo)
-Successfully connected from my Mac's native Terminal using ssh username@vm-ip-address, accepted the host key fingerprint, and authenticated with my password
+-Installed the OpenSSH server on my Ubuntu VM: sudo apt install openssh-server
+-Discovered the service was installed but disabled by default — started and enabled it with sudo systemctl start ssh and sudo systemctl enable ssh
+-Verified it was running with sudo systemctl status ssh (confirmed active (running))
+-Found my VM's internal IP address using ip addr (identified the correct network interface, enp0s1, vs. the loopback interface lo)
+-Successfully connected from my Mac's native Terminal using ssh username@vm-ip-address, accepted the host key fingerprint, and authenticated with my password
 
 Skills practiced:
 
-Managing systemd services (start, enable, status)
-Reading network interface output to identify the correct IP address
-Understanding SSH host key verification and first-time connection warnings
-Remote login and authentication over SSH
+-Managing systemd services (start, enable, status)
+-Reading network interface output to identify the correct IP address
+-Understanding SSH host key verification and first-time connection warnings
+-Remote login and authentication over SSH
