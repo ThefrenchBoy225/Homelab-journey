@@ -58,26 +58,28 @@ Goal: Practice secure file transfer over SSH, set up passwordless authentication
 
 What I did:
 
-Transferred a test file from my Mac to the Ubuntu VM using scp, confirmed successful transfer by checking file contents on the receiving end with cat
-Generated an SSH key pair on my Mac with ssh-keygen -t ed25519
-Installed my public key on the Ubuntu VM using ssh-copy-id
-Confirmed passwordless SSH login now works — no more typing a password for every connection
-Attempted to set up Kali Linux (ARM64 Installer) as a second VM in UTM
+- Transferred a test file from my Mac to the Ubuntu VM using `scp`, confirmed successful transfer by checking file contents on the receiving end with `cat`
+- Generated an SSH key pair on my Mac with `ssh-keygen -t ed25519`
+- Installed my public key on the Ubuntu VM using `ssh-copy-id`
+- Confirmed passwordless SSH login now works — no more typing a password for every connection
+- Attempted to set up Kali Linux (ARM64 Installer) as a second VM in UTM
 
 Issues encountered:
 
-Kali VM hung on a black screen after selecting "Install" from the GRUB boot menu, showing "Guest has not initialized the display (yet)"
-Diagnosed using Activity Monitor — found the QEMU process for the Kali VM running at 200%+ CPU, ruling out a simple freeze and suggesting the VM was actively working but not rendering
-Switched the emulated display card from a virtio option to VGA (a more universally compatible option) — issue persisted
-Verified the downloaded Kali ISO file size (3.97 GB) matched expectations, ruling out a corrupted/incomplete download
-Concluded this is likely a deeper UTM/QEMU + Kali ARM64 compatibility issue rather than a simple config fix — will continue troubleshooting next session (options to try: NetInstaller image, explicit CPU core allocation, community forum research, or installing security tools directly on the existing Ubuntu VM as an alternative)
+- Kali VM hung on a black screen after selecting "Install" from the GRUB boot menu, showing "Guest has not initialized the display (yet)"
+- Diagnosed using Activity Monitor — found the QEMU process for the Kali VM running at 200%+ CPU, ruling out a simple freeze and suggesting the VM was actively working but not rendering
+- Switched the emulated display card from a `virtio` option to VGA (a more universally compatible option) — issue persisted
+- Verified the downloaded Kali ISO file size (3.97 GB) matched expectations, ruling out a corrupted/incomplete download
+- Concluded this is likely a deeper UTM/QEMU + Kali ARM64 compatibility issue rather than a simple config fix — will continue troubleshooting next session (options to try: NetInstaller image, explicit CPU core allocation, community forum research, or installing security tools directly on the existing Ubuntu VM as an alternative)
 
 Skills practiced:
 
-Secure file transfer with scp
-SSH key-based authentication (ssh-keygen, ssh-copy-id)
-Using Activity Monitor to diagnose VM resource usage
-Systematic troubleshooting: isolating variables (display driver, file integrity, CPU) one at a time rather than guessing
+- Secure file transfer with `scp`
+- SSH key-based authentication (`ssh-keygen`, `ssh-copy-id`)
+- Using Activity Monitor to diagnose VM resource usage
+- Systematic troubleshooting: isolating variables (display driver, file integrity, CPU) one at a time rather than guessing
+
+
 
 Next steps:
 
