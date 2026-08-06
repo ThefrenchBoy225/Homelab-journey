@@ -123,6 +123,37 @@ Ubuntu VM is now being actively monitored by a real, industry-standard SIEM/XDR 
 
 ---
 
-## Entry 5 — [Date]
+## Entry 5 — August 4, 2026: Wireshark Traffic Capture & Simulated SSH Brute-Force Attack
 
-*(Next entry goes here)*
+**Goal:** Use Wireshark to capture and analyze network traffic from a simulated SSH brute-force attack against the Ubuntu VM, using `hydra`.
+
+### What I did
+- Installed **Wireshark** on my Mac via Homebrew, alongside `hydra` (already installed in Entry 4)
+- Started a packet capture in Wireshark, initially on the Mac's Wi-Fi interface
+- Ran `hydra` from the Mac terminal against the Ubuntu VM's SSH service (port 22) using a small password list, simulating a brute-force login attempt
+- Filtered the capture on `ssh` to isolate relevant traffic — 371 total packets captured, 77 matching the SSH filter (~21%)
+- Inspected an individual server response packet and found the raw SSH banner exposed in the hex/ASCII pane before encryption begins: `SSH-2.0-OpenSSH_10.2p1 Ubuntu-2ubuntu3.5`
+
+### Issues encountered (and how I solved them)
+1. **No VM traffic visible on Wi-Fi interface** — Capturing on the Mac's Wi-Fi adapter showed zero traffic between the host and the Ubuntu VM
+2. **Diagnosis** — UTM VMs on Apple Silicon don't route traffic over the physical Wi-Fi radio; they run on a virtual/shared network backed by a bridge interface instead, so capturing on Wi-Fi only ever sees what actually leaves the Mac wirelessly
+3. **Fix** — Switched the Wireshark capture interface to **`bridge100`**, the virtual bridge UTM uses to connect the host to its VMs — traffic between the host (192.168.64.1) and the Ubuntu VM (192.168.64.3) appeared immediately
+
+### Result
+Successfully captured and analyzed a full simulated SSH brute-force attack at the packet level. The capture showed two things clearly: a repeating handshake pattern (client protocol announcement → server response → key exchange init → repeat) consistent with `hydra` tearing down and rebuilding a full SSH handshake for every login attempt, and a clean banner grab confirming the exact OpenSSH version running on the target — the same kind of unencrypted fingerprinting information a real attacker would use for recon before selecting an exploit.
+
+![SSH banner grab and repeated handshake pattern in Wireshark](./screenshots/entry5-ssh-capture.png)
+
+### Skills practiced
+- Packet capture and traffic analysis with Wireshark
+- Wireshark display filters (`ssh`)
+- Diagnosing virtual network topology (physical vs. bridge interfaces) on a hypervisor
+- Reading raw hex/ASCII payload data to identify protocol banners
+- Recognizing the network-level signature of a brute-force attack (repeated handshakes in a short window)
+- Simulated offensive tooling with `hydra`
+
+### Next steps
+- Re-run this exercise once Wazuh Cloud is available again (locked out until Nov 2026) to correlate the Wireshark capture with Wazuh's alerting/MITRE ATT&CK mapping side by side
+- Explore Wireshark's "Follow TCP Stream" feature on other protocols for deeper traffic analysis practice
+- Consider adding an `iptables` rate-limiting rule on the Ubuntu VM to see how it changes the traffic pattern for a brute-force attempt
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
