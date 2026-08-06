@@ -157,3 +157,55 @@ Successfully captured and analyzed a full simulated SSH brute-force attack at th
 - Explore Wireshark's "Follow TCP Stream" feature on other protocols for deeper traffic analysis practice
 - Consider adding an `iptables` rate-limiting rule on the Ubuntu VM to see how it changes the traffic pattern for a brute-force attempt
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+## Entry 6 — August 6, 2026: Defending Against the Brute-Force with fail2ban
+
+**Goal:** Close the loop from Entry 5 by actually defending the Ubuntu VM against the SSH brute-force attack I simulated, and prove the defense works at the packet level.
+
+### What I did
+- Installed **fail2ban** on the Ubuntu VM: `sudo apt install fail2ban -y`
+- Confirmed the service installed, enabled, and was running with `sudo systemctl status fail2ban`
+- Created a custom jail configuration at `/etc/fail2ban/jail.local` (rather than editing the default `jail.conf`, which can be overwritten by updates) to enable and tune the `sshd` jail:
+  ```
+  [sshd]
+  enabled = true
+  port = ssh
+  filter = sshd
+  logpath = /var/log/auth.log
+  maxretry = 3
+  findtime = 300
+  bantime = 600
+  ```
+  This bans an IP for 10 minutes after 3 failed SSH logins within a 5-minute window
+- Restarted fail2ban and verified the `sshd` jail was active with `sudo fail2ban-client status` and `sudo fail2ban-client status sshd`
+- Re-ran the same `hydra` brute-force attack from Entry 5 against the Ubuntu VM
+- Confirmed the ban triggered: `fail2ban-client status sshd` showed **Total failed: 5**, **Currently banned: 1**, with my Mac's IP (192.168.64.1) listed under Banned IP list
+- To make testing faster, temporarily lowered `bantime` to 120 seconds, then re-ran `hydra` and immediately attempted a manual `ssh` connection from the Mac within the ban window
+- The manual SSH attempt returned **`ssh: connect to host 192.168.64.3 port 22: Connection refused`** — the ban actively rejected the connection
+- Captured the whole sequence in Wireshark on the `bridge100` interface and found the exact rejection packets using an `icmp` display filter
+
+### Issues encountered (and how I solved them)
+1. **nano save prompt got stuck / filename field got mangled** — while editing `jail.local`, accidentally deleted part of the filename at the "Write to File" prompt and couldn't retype it cleanly. Fixed by pressing `Ctrl+C` to cancel the prompt, then `Ctrl+K` to clear the filename line and retyping `/etc/fail2ban/jail.local` from scratch before saving
+2. **First attempt to catch the block in Wireshark showed a full successful SSH session instead** — by the time I tried a manual `ssh` connection, the original 10-minute ban had already expired (too much time passed while troubleshooting nano). Confirmed with `fail2ban-client status sshd` showing `Currently banned: 0`
+3. **Fix** — temporarily shortened `bantime` to 120 seconds in `jail.local` and restarted fail2ban, then re-ran `hydra` immediately followed by a manual SSH attempt within that shorter window, successfully catching the live block this time
+4. **hydra's 5 parallel connection attempts all succeeded at the TCP level** — during the first successful ban capture, filtering Wireshark for SYN/SYN-ACK pairs on the attack traffic showed all 5 hydra connections got answered normally. This was expected once I thought it through: fail2ban only bans *after* reading failed login entries from `/var/log/auth.log`, and hydra's parallel connections all opened before enough failures were logged and processed — the wordlist finished before a 6th (blockable) attempt could occur
+
+### Result
+Successfully defended the Ubuntu VM against a real brute-force attack and captured proof of it at both the service level and the packet level. `fail2ban` correctly identified 3+ failed SSH logins from the same IP and began actively rejecting further connection attempts. The Mac terminal showed a hard `Connection refused`, and Wireshark confirmed why: the VM responded with an **ICMP Type 3 (Destination Unreachable), Code 3 (Port Unreachable)** packet instead of the normal TCP SYN-ACK — the network-level signature of `iptables` rejecting the connection before it ever reached the SSH service. Multiple repeated ICMP rejection packets in the capture confirmed the block held for more than one attempt.
+
+![ICMP Destination Unreachable (Port Unreachable) packet in Wireshark, showing fail2ban actively rejecting the banned IP](./screenshots/entry6-fail2ban-icmp-reject.png)
+
+### Skills practiced
+- Installing and configuring `fail2ban`, including writing a custom jail override file
+- Reading and interpreting `fail2ban-client status` output (failed attempts, ban counts, banned IPs)
+- Understanding the difference between a silently dropped connection and an actively rejected one (ICMP port-unreachable vs. no response at all)
+- Using Wireshark's Find Packet (`Ctrl+F`) and display filters (`icmp`, `ip.addr`) to locate specific events inside a large capture
+- Correlating application-layer log behavior (fail2ban reading `auth.log`) with what actually shows up on the wire
+- Iterative testing under time pressure — adjusting `bantime` to make a race-condition-prone test reliably reproducible
+- systemd service management and nano file editing under real troubleshooting conditions
+
+### Next steps
+- Re-run this exercise once Wazuh Cloud is available again (locked out until Nov 2026) to see the brute-force *and* the fail2ban response reflected in Wazuh's dashboard and MITRE ATT&CK mapping
+- Restore `bantime` back to a production-realistic value (600s or higher) now that testing is done
+- Explore fail2ban's email/alert notification options for a more complete "detect and respond" workflow
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
