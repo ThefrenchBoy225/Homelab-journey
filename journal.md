@@ -209,3 +209,51 @@ Successfully defended the Ubuntu VM against a real brute-force attack and captur
 - Restore `bantime` back to a production-realistic value (600s or higher) now that testing is done
 - Explore fail2ban's email/alert notification options for a more complete "detect and respond" workflow
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+## Entry 7 — August 8, 2026: Adding Email Alerts to fail2ban
+
+**Goal:** Extend the fail2ban defense from Entry 6 with actual alerting — get notified automatically when an IP gets banned, instead of having to manually check `fail2ban-client status`.
+
+### What I did
+- Installed `mailutils` on the Ubuntu VM to enable local mail delivery: `sudo apt install mailutils -y`
+- During install, configured Postfix for **"Local only"** delivery — no internet-facing mail server needed, mail just gets delivered to a local mailbox on the VM itself
+- Verified local mail worked with a manual test: `echo "test message" | mail -s "Test Subject" root`, then confirmed it landed in `/var/mail/root`
+- Updated `/etc/fail2ban/jail.local` to add alerting to the existing `[sshd]` jail:
+  ```
+  [sshd]
+  enabled = true
+  port = ssh
+  filter = sshd
+  logpath = /var/log/auth.log
+  maxretry = 3
+  findtime = 300
+  bantime = 600
+  destemail = root@localhost
+  action = %(action_mwl)s
+  ```
+  `action_mwl` is a built-in fail2ban action template meaning **m**ail, with **w**hois lookup info and the matched **l**og lines included in the notification
+- Restarted fail2ban and confirmed it automatically sent a "jail started" notification email on its own, proving the mail pipeline was wired up correctly before even triggering a ban
+- Re-ran the `hydra` brute-force attack from Entries 5 and 6 against the VM to trigger a real ban
+- Confirmed the ban email arrived by checking the mailbox on the VM: `sudo cat /var/mail/root`
+
+### Issues encountered (and how I solved them)
+1. **Checked the wrong machine's mailbox** — ran `sudo cat /var/mail/root` on my **Mac** terminal instead of the VM terminal, which understandably failed with "No such file or directory," since the mailbox only exists inside the VM where Postfix is actually installed. Fixed by switching to the correct terminal window
+2. **`grep` failed with "Permission denied"** — tried filtering the mailbox for just the fail2ban subject lines without `sudo`, but `/var/mail/root` is only readable by root. Fixed by prefixing the command with `sudo`: `sudo grep -A 5 "Subject: \[Fail2Ban\]" /var/mail/root`
+
+### Result
+Successfully turned fail2ban's silent blocking into an active alerting system. Two automatic emails now confirm the whole pipeline works: a **jail-started notification** whenever fail2ban restarts, and a **ban notification** whenever an attacker gets blocked. The ban email included a clear summary ("The IP 192.168.64.1 has just been banned by Fail2Ban after 3 attempts against sshd") plus a full ARIN WHOIS lookup on the offending IP. Since this is homelab traffic, the WHOIS correctly identified 192.168.64.1 as an RFC1918 private address range rather than a real organization — in a production, internet-facing setup, this same email would show the actual ISP/organization behind a real attacking IP, which is genuinely useful threat-intel context to have delivered automatically.
+
+![fail2ban ban notification email showing the ban summary and WHOIS lookup for the banned IP](./screenshots/entry7-fail2ban-email-alert.png)
+
+### Skills practiced
+- Configuring local mail delivery with Postfix and `mailutils`
+- Extending a fail2ban jail configuration with built-in action templates (`action_mwl`)
+- Reading and troubleshooting mailbox files (`/var/mail/root`) with `cat` and `grep`, including root-owned file permissions
+- Understanding WHOIS lookups and recognizing RFC1918 private address ranges
+- Connecting a detection mechanism (fail2ban) to an actual notification/response step — a basic version of the "alert" stage in a real detect-and-respond security workflow
+
+### Next steps
+- Explore forwarding these local alerts to a real external email address using an SMTP relay, for a more realistic "you'd actually get paged" setup
+- Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare fail2ban's lightweight alerting against a full SIEM's alerting/dashboard workflow
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
