@@ -257,3 +257,46 @@ Successfully turned fail2ban's silent blocking into an active alerting system. T
 - Explore forwarding these local alerts to a real external email address using an SMTP relay, for a more realistic "you'd actually get paged" setup
 - Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare fail2ban's lightweight alerting against a full SIEM's alerting/dashboard workflow
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+## Entry 8 — August 12, 2026: Exploring Splunk Cloud (and Learning ARM64's Limits)
+
+**Goal:** Gain hands-on experience with Splunk, one of the most widely requested SIEM tools in job postings, without waiting for Wazuh Cloud access to return in November.
+
+### What I did
+- Attempted to install **Splunk Enterprise** directly on the Ubuntu VM, following the same download process used for other tools so far
+- Checked Splunk's official system requirements table and discovered **full Splunk Enterprise does not support ARM64 Linux** — every Linux distribution listed (Ubuntu, Debian, Rocky/Alma, SLES, Amazon Linux) is only available on x86 (64-bit); ARM (64-bit) rows only show support for the lightweight Universal Forwarder, not the actual Enterprise product
+- Pivoted to a two-track plan instead: use the **Splunk Cloud Platform 14-day free trial** (hosted on Splunk's servers, so the ARM64 limitation doesn't apply) for hands-on SPL practice now, and install **ELK Stack** (Elasticsearch + Kibana) on the VM later, since it does support ARM64
+- Signed up for the Splunk Cloud trial using my existing splunk.com account and logged into a live Splunk Cloud instance
+- Practiced core SPL (Splunk's search language) directly against Splunk's own internal logs:
+  - `index=_internal | stats count by sourcetype` — aggregated 819,000+ events across 22 sourcetypes to get an overview of the data
+  - Drilled into raw `mongod` events to see actual structured JSON log content and Splunk's automatic field extraction (nested fields like `attr.connectionId`, `attr.remote` broken out automatically)
+  - `index=_internal sourcetype=mongod msg="Error*"` — wildcard search that surfaced real error events, including specific connection IDs and remote IPs tied to each error
+  - `index=_internal | timechart count by sourcetype` — built a stacked time-series visualization of event volume by sourcetype, then saved it as a dashboard panel
+- Configured a **scheduled alert** ("Mongod Error Alert") on the error search: cron schedule `*/5 * * * *` (every 5 minutes), trigger condition "Number of Results is greater than 0," action set to log to Triggered Alerts
+
+### Issues encountered (and how I solved them)
+1. **Downloaded the wrong architecture repeatedly** — same lesson as Kali Linux back in Entry 1. First landed on Splunk AppDynamics/Universal Forwarder/On-Call pages by mistake (different products entirely), then on the main Linux download page which defaults to x86 without clearly labeling architecture
+2. **Fix** — navigated to Splunk's official system requirements documentation instead of relying on the download page, which laid out every supported OS/architecture combination in a clear table — this is what confirmed ARM64 isn't supported for the actual Enterprise product, saving me from downloading and troubleshooting an install that was never going to work
+3. **Cron field pre-filled with a leftover value** — when switching the alert schedule from "hourly" to a custom cron expression, the field carried over "15" from the previous hourly setting instead of resetting. Fixed by manually replacing it with `*/5 * * * *` for a faster testing cadence
+
+### Result
+Got genuine hands-on SPL experience without needing to wait for Wazuh, and learned a real architecture constraint that's worth knowing generally: not every enterprise tool supports ARM64 yet, even in 2026, which matters for anyone building a homelab on Apple Silicon. Ended the session with a working search, a saved dashboard visualization, and a correctly configured scheduled alert — a solid first look at how a widely-used commercial SIEM actually works day to day.
+
+![Splunk timechart dashboard panel showing event volume by sourcetype](./screenshots/entry8-splunk-timechart.png)
+
+![Splunk scheduled alert configuration for the Mongod Error Alert](./screenshots/entry8-splunk-alert-config.png)
+
+### Skills practiced
+- Reading vendor system requirements documentation to verify platform compatibility before attempting an install
+- Splunk Search Processing Language (SPL): `stats`, wildcard field matching, `timechart`
+- Reading and interpreting structured JSON log events and automatic field extraction
+- Building and saving a dashboard panel from a search
+- Configuring a scheduled alert with cron syntax and trigger conditions
+- Recognizing when to abandon one approach and pivot to a working alternative, rather than forcing an incompatible setup
+
+### Next steps
+- Install ELK Stack (Elasticsearch + Kibana) on the Ubuntu VM, since it supports ARM64 natively
+- Let the Splunk alert run for a few cycles and check the Triggered Alerts history to confirm it's firing as expected
+- Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare all three tools — Wazuh, Splunk, and ELK — hands-on
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
