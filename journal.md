@@ -300,3 +300,39 @@ Got genuine hands-on SPL experience without needing to wait for Wazuh, and learn
 - Let the Splunk alert run for a few cycles and check the Triggered Alerts history to confirm it's firing as expected
 - Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare all three tools — Wazuh, Splunk, and ELK — hands-on
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+## Entry 9 — August 12, 2026: Installing ELK Stack (Elasticsearch + Kibana) on ARM64
+
+**Goal:** Get a real SIEM-adjacent stack running natively on the Ubuntu VM, since Splunk Enterprise turned out not to support ARM64 (Entry 8).
+
+### What I did
+- Added Elastic's official APT repository to the Ubuntu VM: imported Elastic's GPG signing key with `gpg --dearmor`, then registered the repo via `/etc/apt/sources.list.d/elastic-8.x.list`
+- Installed **Elasticsearch 8.19.20** with `sudo apt install elasticsearch` — confirmed the package pulled genuine ARM64 binaries from Elastic's repo, unlike Splunk
+- Set a conservative JVM heap limit before first start, given the VM's 8GB RAM budget
+- Enabled and started the service with `systemctl`, confirmed `active (running)` via `systemctl status`
+- Saved the auto-generated `elastic` superuser password — modern Elasticsearch enables authentication and TLS by default, no manual security setup required
+- Installed **Kibana 8.19.20** from the same Elastic repo, enabled and started it as a systemd service
+- Generated an enrollment token on the Elasticsearch side (`elasticsearch-create-enrollment-token -s kibana`) and used it to connect Kibana to Elasticsearch via `kibana-setup`
+- Restarted Kibana and logged into the web UI at `http://localhost:5601` using the `elastic` superuser credentials — landed on the "Welcome to Elastic" home screen
+
+### Issues encountered (and how I solved them)
+1. **Enrollment token expired before I could use it** — enrollment tokens only stay valid for a short window (roughly 30 minutes). My first token had already expired by the time I ran the setup command, resulting in "Invalid enrollment token provided"
+2. **Copy-paste added stray angle brackets around the token** — on the second attempt, the token got pasted as `<eyJ2ZXIi...==>` instead of the raw string. Bash interpreted `<` as an input-redirect operator instead of literal text, throwing a `syntax error near unexpected token 'newline'`
+3. **Fix** — generated a third, fresh token and ran the enrollment command immediately afterward in the same sitting, pasting only the raw token with no surrounding characters. This succeeded: "✔ Kibana configured successfully."
+
+### Result
+Successfully stood up a working Elasticsearch + Kibana stack entirely on ARM64 — the exact thing Splunk Enterprise couldn't do on this hardware. Both services are enabled to start automatically on boot, security (auth + TLS) is on by default out of the box, and the Kibana web interface is fully accessible and ready for real data. This closes the loop from Entry 8: instead of just documenting that Splunk was a dead end, I now have a genuinely comparable open-source alternative running hands-on in the homelab.
+
+### Skills practiced
+- Adding a third-party APT repository with GPG key verification
+- Installing and managing systemd services (`daemon-reload`, `enable`, `start`, `status`)
+- Configuring JVM memory limits for a resource-constrained VM
+- Understanding and troubleshooting security enrollment tokens (expiration windows, exact-string requirements)
+- Diagnosing a shell syntax error caused by special characters (`<`) in a pasted value
+- Connecting two services together via a token-based trust handshake, rather than a plaintext password
+
+### Next steps
+- Add a real data source to Kibana (likely `/var/log/auth.log` or the fail2ban logs) so there's actual homelab data to search and visualize, rather than an empty instance
+- Build a Kibana dashboard comparable to the Splunk timechart panel from Entry 8, to compare the two tools side by side
+- Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare Wazuh, Splunk, and ELK hands-on, all having now been used in this project
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
