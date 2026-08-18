@@ -336,3 +336,41 @@ Successfully stood up a working Elasticsearch + Kibana stack entirely on ARM64 �
 - Build a Kibana dashboard comparable to the Splunk timechart panel from Entry 8, to compare the two tools side by side
 - Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare Wazuh, Splunk, and ELK hands-on, all having now been used in this project
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+## Entry 10 — August 18, 2026: Completing the ELK Pipeline with Filebeat
+
+**Goal:** Feed real log data into the ELK Stack built in Entry 9, so Elasticsearch and Kibana had something actual to search and visualize instead of sitting empty.
+
+### What I did
+- Installed **Filebeat 8.19.20** from the same Elastic APT repo already configured for Elasticsearch/Kibana — no new GPG key or repo setup needed
+- Enabled Filebeat's built-in **system module** (`filebeat modules enable system`), which is pre-built to read standard Linux logs like `/var/log/auth.log` and `/var/log/syslog`
+- Configured Filebeat's Elasticsearch output in `/etc/filebeat/filebeat.yml`: pointed it at `localhost:9200` over HTTPS (Elasticsearch's default TLS), set `ssl.verification_mode: none` to accept the self-signed homelab certificate, and authenticated with the `elastic` superuser
+- Ran `filebeat setup -e` to load Filebeat's index template into Elasticsearch and its pre-built dashboards into Kibana
+- Started and enabled Filebeat as a persistent systemd service
+- Verified data in Kibana's **Discover** view under a `filebeat-*` data view — confirmed real documents flowing in with fields like `event.dataset`, `agent.hostname`, and full timestamps
+- Filtered specifically for `event.dataset: "system.auth"` and inspected individual events, finding genuine authentication activity — including a `pam_unix(sudo:session): session closed for user root` entry, confirming real sudo/privilege-escalation activity was being captured, not just noise
+- Built a stacked bar chart in **Kibana Lens**: `@timestamp` on the horizontal axis, count of records on the vertical axis, broken down by `event.dataset` to visually separate `system.auth` from `system.syslog` activity over time — a direct parallel to the Splunk `timechart count by sourcetype` panel from Entry 8
+
+### Issues encountered (and how I solved them)
+1. **YAML indentation errors in `filebeat.yml`** — while adding `protocol`, `ssl.verification_mode`, and `username` under `output.elasticsearch:`, several lines ended up with inconsistent indentation (0 or 1 space instead of the required 2). Since YAML uses indentation to define structure, misaligned lines were being read as disconnected top-level keys rather than nested settings, which would have silently broken the config. Fixed by deleting and retyping each line with exactly 2 spaces to match `hosts:`
+2. **401 Unauthorized connecting to Elasticsearch** — `filebeat setup -e` failed with a security exception because the password saved in `filebeat.yml` didn't match the actual `elastic` superuser password generated during the Entry 9 Elasticsearch install. Fixed by locating the correct saved password and updating the config
+3. **No data appearing in Kibana Discover despite Filebeat running** — even with the module enabled and the service showing `active (running)`, Discover returned zero results. Investigating `/etc/filebeat/modules.d/system.yml` revealed the real cause: enabling a *module* only makes it available — the individual **filesets** inside it (`syslog` and `auth`) were still explicitly set to `enabled: false` by default. Fixed by manually setting both to `true` and restarting Filebeat, after which 93 real documents appeared immediately
+
+### Result
+The full log pipeline is now working end to end: **Ubuntu system logs → Filebeat → Elasticsearch → Kibana**. This closes the loop from Entry 9 — instead of an empty ELK install, there's now a genuine, queryable stream of real authentication and system activity from the homelab VM, browsable in Discover and visualized in a saved Lens chart. The fileset-vs-module distinction was a non-obvious gotcha that cost real troubleshooting time, and is worth remembering for any future Beats/Elastic work.
+
+![Kibana Lens stacked bar chart showing system.auth vs system.syslog event volume over time](./screenshots/entry10-kibana-filebeat-chart.png)
+
+### Skills practiced
+- Configuring a log-shipping agent (Filebeat) end to end: repo setup, module/fileset configuration, output authentication
+- Diagnosing YAML indentation issues and understanding why whitespace is structurally significant in YAML
+- Troubleshooting authentication failures by cross-referencing saved credentials rather than guessing
+- Distinguishing between a module being "enabled" and its individual filesets being enabled — a real distinction in Elastic's Beats architecture
+- Reading and interpreting real Linux auth log data (PAM session events) at the individual-event level
+- Building a time-series visualization in Kibana Lens with a categorical breakdown, directly comparable to equivalent Splunk SPL work from Entry 8
+
+### Next steps
+- Add fail2ban's own log output as a second Filebeat data source, to visualize ban events alongside raw auth activity
+- Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare all three tools — Wazuh, Splunk, and ELK — hands-on, now that all three have real data flowing through them
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
