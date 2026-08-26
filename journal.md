@@ -374,3 +374,46 @@ The full log pipeline is now working end to end: **Ubuntu system logs → Filebe
 - Add fail2ban's own log output as a second Filebeat data source, to visualize ban events alongside raw auth activity
 - Re-run this whole exercise once Wazuh Cloud is available again (locked out until Nov 2026) to compare all three tools — Wazuh, Splunk, and ELK — hands-on, now that all three have real data flowing through them
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+
+## Entry 11 — August 18, 2026: Vulnerability Assessment — Scan, Remediate, Verify
+
+**Goal:** Start rounding out the project beyond blue-team/SIEM work by covering Security Assessments — running a real vulnerability scan against the Ubuntu VM, then actually fixing what it found, rather than just collecting scan output.
+
+### What I did
+- Ran a full port and service scan against the VM: `sudo nmap -sV -p- localhost`, scanning all 65,535 ports rather than just the common ones, to get a complete picture of the attack surface
+- Identified six open services: SSH (OpenSSH 10.2p1), SMTP (Postfix), CUPS printing (631), and three Elasticsearch/Kibana-related ports from Entries 9–10
+- Ran nmap's vulnerability-detection scripts (`sudo nmap --script vuln localhost`), saved via `tee` so the output was visible live and archived to a file at the same time — the full scan took just under 9 minutes
+- As part of the same scan, nmap's `http-enum` script automatically brute-forced hundreds of common admin-panel paths against Kibana/Elasticsearch's web interface — every single one returned `401 Unauthorized`, confirming the authentication set up in Entry 9 was correctly blocking access under active scanning, not just sitting there unused
+- Identified two real, actionable vulnerabilities:
+  - **Port 25 (SMTP/Postfix):** flagged for an **Anonymous Diffie-Hellman Key Exchange MitM vulnerability** — the TLS configuration allowed a weak key-exchange mode vulnerable to active man-in-the-middle attacks
+  - **Port 631 (CUPS):** flagged as **likely vulnerable to a Slowloris DoS attack** (CVE-2007-6750) — and notably, CUPS wasn't even needed on this VM at all, since printing isn't used
+- Remediated both findings:
+  - Disabled CUPS entirely with `systemctl stop cups` and `systemctl disable cups`, removing the vulnerable service (and the unnecessary attack surface) in one step
+  - Hardened Postfix's TLS configuration in `/etc/postfix/main.cf` by adding `smtpd_tls_ciphers = high` and an explicit `smtpd_tls_exclude_ciphers` list excluding anonymous and weak cipher suites, then restarted Postfix
+- Verified both fixes with follow-up scans: a targeted port scan confirmed CUPS was no longer listening, and re-running `nmap --script ssl-dh-params -p 25 localhost` returned a clean result with zero vulnerabilities flagged
+
+### Issues encountered (and how I solved them)
+1. **Accidentally killed a running scan with Ctrl+C** — while troubleshooting a separate stuck `sudo` password prompt, pressing Ctrl+C also terminated the nmap scan that was writing to a file in the same terminal, leaving a nearly-empty output file. Learned that Ctrl+C kills the entire foreground process chain in a terminal, not just a stuck sub-prompt — re-ran the scan from scratch afterward
+2. **Repeated sudo authentication failures** — several password attempts failed in a row with no visible cause. Diagnosed by testing in isolation with `sudo whoami` (a fast way to confirm credentials without waiting through a long scan) rather than guessing blindly; turned out to be simple mistyping, since Linux's `sudo` prompt gives zero visual feedback (not even asterisks) while typing
+
+### Result
+Completed a full, realistic vulnerability assessment cycle — reconnaissance, vulnerability identification, remediation, and verification — rather than just collecting raw scan data. Both real findings were fixed and independently confirmed resolved through follow-up scans, and the Elasticsearch/Kibana authentication work from Entries 9–10 held up correctly under active, automated scanning pressure. This is the first entry in the project explicitly framed as a Security Assessment rather than blue-team monitoring, and the first domain checked off in a broader plan to cover Incident Response, GRC, Cloud Security, and Active Directory going forward.
+
+![nmap verification scan confirming zero vulnerabilities on port 25 after the Postfix TLS fix](./screenshots/entry11-nmap-verification-scan.png)
+
+### Skills practiced
+- Full-range TCP port scanning and service/version fingerprinting with nmap
+- Running and interpreting nmap's NSE vulnerability-detection scripts (`--script vuln`)
+- Reading CVE references and vulnerability descriptions to assess real-world risk and severity
+- Remediating findings directly: disabling unnecessary services, hardening TLS cipher configuration
+- Verifying a fix actually worked via a targeted follow-up scan, rather than assuming a config change was sufficient
+- Using `tee` to view command output live while simultaneously saving it to a file for later documentation
+- Practical terminal troubleshooting: understanding what Ctrl+C actually terminates, and isolating a suspected password issue with a fast, low-stakes test command
+
+### Next steps
+- Consider installing OpenVAS/Greenbone for a deeper, more comprehensive vulnerability scan beyond what nmap's NSE scripts cover
+- Move to the next domain in the roadmap: Incident Response — formalizing the hydra/fail2ban work from Entries 5–7 into a structured NIST IR lifecycle write-up
+- Continue through the remaining planned domains: GRC, Cloud Security, and Active Directory
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
