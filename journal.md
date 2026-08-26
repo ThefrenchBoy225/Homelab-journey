@@ -417,3 +417,38 @@ Completed a full, realistic vulnerability assessment cycle — reconnaissance, v
 - Move to the next domain in the roadmap: Incident Response — formalizing the hydra/fail2ban work from Entries 5–7 into a structured NIST IR lifecycle write-up
 - Continue through the remaining planned domains: GRC, Cloud Security, and Active Directory
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+
+
+## Entry 12 — August 2026: Incident Response — Formalizing the Attack Story
+
+**Goal:** Move into the Incident Response domain by taking the SSH brute-force work from Entries 5–7 — which was documented as a series of separate technical experiments — and reframing it as a single, connected incident using the industry-standard NIST SP 800-61 lifecycle: Preparation, Detection & Analysis, Containment/Eradication/Recovery, and Post-Incident Activity.
+
+### What I did
+- Reviewed Entries 1–7 specifically through an incident-response lens rather than a "what did I build" lens, identifying which existing work mapped to each of the four NIST phases
+- **Preparation:** SSH key-based authentication, Wireshark installed and ready for traffic capture, and fail2ban configured with tuned `maxretry`/`findtime` thresholds — all standing controls in place *before* any simulated attack occurred
+- **Detection & Analysis:** the simulated `hydra` brute-force attack was identified two ways — at the network level, via the distinctive repeated SSH handshake pattern and exposed banner grab visible in Wireshark (Entry 5); and at the host level, via fail2ban actively monitoring `auth.log` and counting failed login attempts (Entry 6)
+- **Containment, Eradication & Recovery:** fail2ban automatically banned the offending IP once the failure threshold was crossed, confirmed independently at the packet level by an ICMP Type 3 (Destination Unreachable), Code 3 (Port Unreachable) rejection — proof the block was actually enforced, not just logged (Entry 6). Recovery was automatic: the ban was time-limited and the service returned to normal operation without manual intervention
+- **Post-Incident Activity:** wrote a genuine retrospective (new work, not previously documented) covering what worked well and what could be improved for next time
+- Drafted a separate, formal Incident Response Report as a standalone document, written in the structure and tone of a real IR report rather than a casual dev-log entry — intended as its own portfolio artifact
+
+### Post-Incident Review (Lessons Learned)
+- **What worked well:** the combination of network-level (Wireshark) and host-level (fail2ban/auth.log) detection gave two independent ways to confirm the same incident, which is a stronger detection posture than relying on either alone. The response was also fully automated — no manual intervention was needed to contain the threat
+- **What could improve:** the original `bantime` (600 seconds) meant a resourceful attacker could simply wait out the ban and retry; a production environment would likely want either a longer ban, an escalating ban duration for repeat offenders, or a permanent block after a certain number of bans. Alerting was email-only (Entry 7) — a real SOC would want this routed to a ticketing system or chat tool (Slack/Teams) for faster human visibility. There was also no formal "incident closed" step — the process detects and contains automatically, but nothing marks the incident as reviewed and closed the way a real IR process would
+- **Follow-up actions identified:** implement escalating ban durations for repeat offenders; route alerts to a second channel beyond email; add a manual review/close step to the process even for automated responses, to build the habit of formal incident closure
+
+### Result
+Reframed three separate technical entries into a single, coherent incident response case study using an industry-standard framework, rather than leaving them as disconnected "I built this" posts. This is a genuinely different and valuable way to present the same underlying work — it demonstrates the ability to think in terms of a real IR lifecycle, not just individual tools, which is exactly how incident response is actually discussed and evaluated in a professional setting.
+
+### Skills practiced
+- Applying the NIST SP 800-61 incident response lifecycle to real technical work
+- Distinguishing between detection, containment, and recovery as distinct phases with different goals
+- Writing a genuine post-incident retrospective, including identifying real gaps rather than just describing successes
+- Translating hands-on technical work into the structure and language expected in professional incident response documentation
+
+### Next steps
+- Move to the next domain in the roadmap: GRC — mapping existing homelab controls against a formal framework (NIST CSF or CIS Controls) and writing a short policy document
+- Consider implementing the escalating-ban-duration improvement identified in the retrospective as a concrete follow-up technical task
+- Continue through Cloud Security and Active Directory as planned
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
