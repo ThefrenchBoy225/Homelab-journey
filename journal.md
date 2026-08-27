@@ -452,3 +452,36 @@ Reframed three separate technical entries into a single, coherent incident respo
 - Consider implementing the escalating-ban-duration improvement identified in the retrospective as a concrete follow-up technical task
 - Continue through Cloud Security and Active Directory as planned
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+
+
+
+## Entry 13 — August 2026: GRC — Mapping Controls to NIST CSF and Writing an Actual Policy
+
+**Goal:** Move into Governance, Risk, and Compliance (GRC) — the third domain in the plan — by mapping the technical work from Entries 1–12 against a formal cybersecurity framework, and writing a real policy document rather than just describing tools and configurations.
+
+### What I did
+- Reviewed the entire project so far specifically through a governance lens, mapping existing work against all six functions of the **NIST Cybersecurity Framework (CSF) 2.0**: Govern, Identify, Protect, Detect, Respond, and Recover
+- Confirmed genuine coverage across every function — not just the technical ones (Protect/Detect/Respond) that come naturally from hands-on work, but also Govern (structured documentation across every entry) and Identify (asset inventory and vulnerability scanning from Entry 11)
+- Instead of writing three separate, disconnected policy documents, consolidated the work into a single **Information Security Policy Suite** — a standalone formal document containing three internally-linked sections: Access Control, Vulnerability Management, and Incident Response
+- Each section follows a consistent structure: Objective, Requirements (the actual policy statements), and Applied Evidence (directly citing the real technical work from earlier entries that satisfies each requirement)
+- Included a NIST CSF 2.0 alignment table summarizing which applied control maps to which framework function, as a quick-reference summary
+- Produced the document in both `.docx` and `.pdf` formats for the GitHub repo and LinkedIn Featured section respectively
+
+### Result
+Produced a genuinely professional-looking governance artifact that connects individual technical decisions (SSH key auth, vulnerability remediation, automated incident containment) to a documented policy framework — the way security work is actually evaluated and communicated in a real organization, rather than as a list of disconnected tools. Choosing to consolidate into one policy suite rather than three separate documents was itself a small but genuine GRC decision: real organizations typically maintain a unified policy structure rather than scattered standalone documents, and reflecting that in the deliverable is part of demonstrating the skill, not just the writing.
+
+![Information Security Policy Suite cover page and NIST CSF alignment table](./screenshots/entry13-policy-suite.png)
+
+### Skills practiced
+- Applying the NIST Cybersecurity Framework (CSF) 2.0 to real, previously-completed technical work
+- Writing formal security policy language (Objective / Requirements / Applied Evidence structure)
+- Making a structural GRC decision — one consolidated policy suite versus multiple standalone documents — and justifying it
+- Connecting hands-on technical evidence directly to specific policy requirements, rather than treating documentation and technical work as separate activities
+
+### Next steps
+- Move to the next domain in the roadmap: Cloud Security — using an AWS or Azure free tier to cover IAM, security groups, and basic cloud logging
+- Continue toward Active Directory as the final planned domain, likely via a cloud-hosted Windows Server VM
+- Consider revisiting this policy suite as a living document as new domains are added, per its own stated review cycle
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
