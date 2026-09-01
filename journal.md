@@ -485,3 +485,42 @@ Produced a genuinely professional-looking governance artifact that connects indi
 - Continue toward Active Directory as the final planned domain, likely via a cloud-hosted Windows Server VM
 - Consider revisiting this policy suite as a living document as new domains are added, per its own stated review cycle
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+
+
+
+
+
+
+
+## Entry 14 — September 1, 2026: Cloud Security — Azure IAM, RBAC, and Logging
+
+**Goal:** Move into the Cloud Security domain — the fourth in the plan — by standing up a real Azure environment and demonstrating core identity, access, and logging concepts using Microsoft Entra ID, chosen specifically because it connects directly to the upcoming Active Directory domain and my existing Windows/M365 experience.
+
+### What I did
+- Signed up for the **Azure free tier** ($200 in trial credits, 12 months of free core services), using an actual identity-verification signup rather than any third-party "pre-made account" offer (a scam pattern I ran into and avoided while researching the free tier)
+- In **Microsoft Entra ID**, created a test user account ("John Doe") simulating a new employee being onboarded — the same conceptual task as account provisioning in my day-to-day Admin Security Analyst role, just performed in Azure instead of an on-prem environment
+- Created a **Security group** ("IT-Support-Team") and added John Doe as a direct member, simulating role-based departmental grouping
+- Assigned John Doe the built-in **"Reader" role** at the subscription level via Access Control (IAM) — a deliberate least-privilege choice, giving read-only visibility into resources with no ability to create, modify, or delete anything
+- Reviewed **sign-in logs**, confirming successful authentication events for my own account (Status: Success, Application: Azure Portal / Microsoft Azure sign-up) — the cloud-native equivalent of reading `/var/log/auth.log` on the homelab VM, just delivered as a managed service with a structured UI instead of raw text
+- Checked **Network Security Groups (NSGs)** — Azure's equivalent of a local firewall ruleset, conceptually similar to the `iptables` rules fail2ban manages on the Ubuntu VM. None existed yet, which was expected and correct, since NSGs are typically created alongside deployed networked resources (like a VM), and none had been deployed in this environment
+
+### Result
+Completed a full, realistic Identity and Access Management workflow in a genuine cloud environment: **user provisioning → group membership → least-privilege role assignment → activity logging**. This is conceptually the same pattern demonstrated throughout the homelab (account administration in Entry 6-7, access control policy in Entry 13), just applied to cloud infrastructure instead of a self-hosted Linux VM — showing the underlying security thinking transfers directly between environments, which is exactly the point of covering multiple domains rather than going deep on only one.
+
+![Azure Entra ID security group membership showing John Doe successfully added as a direct member of IT-Support-Team](./screenshots/entry14-azure-group-members.png)
+
+### Skills practiced
+- Navigating and provisioning identities in Microsoft Entra ID
+- Creating security groups and managing group membership for access control
+- Applying least-privilege principles through Azure RBAC (built-in "Reader" role)
+- Reading and interpreting cloud-native authentication/sign-in logs
+- Understanding Network Security Groups conceptually, even without a deployed resource to attach one to
+- Recognizing and avoiding a scam pattern (fake "pre-made account" sellers) encountered while researching legitimate free-tier signup
+
+### Next steps
+- Deploy a free-tier Azure VM to generate an actual NSG and observe real network security rule configuration
+- Move to the final domain in the roadmap: Active Directory — likely via a cloud-hosted Windows Server VM, since Apple Silicon doesn't support running Windows Server well locally
+- Consider connecting Entra ID conditional access concepts to the Access Control Policy written in Entry 13, since both cover the same underlying control area
+- Revisit Kali Linux later, possibly via a cloud VM or different hardware
