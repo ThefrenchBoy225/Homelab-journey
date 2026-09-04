@@ -531,10 +531,39 @@ Completed a full, realistic Identity and Access Management workflow in a genuine
 
 
 
-Entry 15: Active Directory Domain — Azure Provisioning Troubleshooting
+### Entry 15 — September 2026: Active Directory — Azure Provisioning Troubleshooting
 
-Started the final domain in the homelab project, Active Directory, which required moving off local UTM virtualization to a cloud-hosted Windows Server VM since Apple Silicon doesn't support Windows Server well locally. Began provisioning a Windows Server 2022 Datacenter VM (ad-dc-01) on Azure's free tier, targeting the B2ats v2 burstable size. Quickly hit a real constraint: Standard_B2ats_v2 is capped at 1 GiB of memory across every Azure region, which falls short of Windows Server 2022's minimum requirements for a Desktop Experience install, let alone running AD DS on top of it. Rather than gamble on a Server Core install with no GUI, decided to upgrade the subscription from Free Trial to Pay-As-You-Go to unlock properly-sized VM options like Standard_B2s (2 vCPU, 4 GiB), while budgeting for the small ongoing storage cost by planning to deallocate the VM between work sessions.
+Goal: Begin the final domain in the plan, Active Directory, by provisioning a cloud-hosted Windows Server VM to serve as a domain controller — necessary since Apple Silicon doesn't support running Windows Server well locally. What followed was less about AD itself and more a real lesson in diagnosing cloud provisioning failures layer by layer.
 
-The upgrade surfaced a second, less obvious issue: even after moving to Pay-As-You-Go, VM creation failed in every region tried (East US, East US 2, Canada Central) with a generic "subscription doesn't support VM creation" error. Diagnosed this down to two separate root causes. First, the Microsoft.Compute resource provider hadn't auto-registered on the new subscription, which was blocking quota data from loading at all — confirmed and fixed by manually registering it under Subscription > Resource providers. Second, once quota data became visible, the actual Standard Bsv2 Family vCPU quota was sitting at a hard 0 limit in every region, a common fraud-prevention hold on newly-upgraded PAYG accounts that doesn't always self-resolve via the standard in-portal quota request tool. Filed a formal support ticket (Basic/free tier) requesting an increase to 8 vCPUs for the Bsv2 family in Canada Central, choosing that region deliberately for lower latency going forward rather than continuing to guess across US regions.
+### What I did
 
-Key takeaway: cloud provisioning failures aren't always what the error message on the surface suggests. What looked like a simple "pick a different region" problem was actually a two-layer account provisioning issue (unregistered resource provider + zero quota allocation) that required drilling into Azure's Resource Providers and Quotas blades directly rather than trusting the Create VM wizard's error messaging. Ticket submitted; awaiting approval before the actual Windows Server deployment and AD DS promotion can proceed.
+Started creating a Windows Server 2022 Datacenter (Desktop Experience) VM named ad-dc-01 on Azure's free tier, initially targeting the Standard_B2ats_v2 size
+Discovered Standard_B2ats_v2 is hard-capped at 1 GiB of memory across every Azure region — below Windows Server 2022's minimum requirements for a Desktop Experience install, ruling it out for running AD DS
+Upgraded the subscription from Free Trial to Pay-As-You-Go to unlock properly-sized VM options like Standard_B2s (2 vCPU, 4 GiB), while planning to deallocate the VM between work sessions to minimize ongoing storage costs
+Hit a second, less obvious blocker post-upgrade: VM creation failed in every region tried (East US, East US 2, Canada Central) with a generic "subscription doesn't support VM creation" error
+Diagnosed this down to two distinct root causes rather than a single regional issue:
+The Microsoft.Compute resource provider hadn't auto-registered on the new subscription, which was silently blocking quota data from loading at all — fixed by manually registering it under Subscription → Resource providers
+Even after registering the provider, the actual Standard Bsv2 Family vCPU quota was sitting at a hard 0 limit in every region — a known fraud-prevention hold applied to newly-upgraded Pay-As-You-Go accounts, which doesn't always self-resolve through the standard in-portal quota request tool
+Filed a formal support ticket (Basic/free support tier, no cost) requesting an increase to 8 vCPUs for the Bsv2 family in Canada Central — chosen deliberately for lower latency going forward rather than continuing to guess across US regions
+Set up a Cost Management budget alert ($20 CAD threshold) as a safety net before doing any further paid provisioning
+
+### Result
+
+No domain controller yet — this entry documents the provisioning path, not the destination. The core finding: a generic "region doesn't support VM creation" error masked two separate, unrelated account-level issues (an unregistered resource provider and a zero-quota hold) that only surfaced by going directly into Azure's Resource Providers and Quotas blades rather than trusting the Create VM wizard's surface-level messaging. Support ticket submitted; AD DS deployment to follow once the quota increase is approved.
+Show Image
+
+### Skills practiced
+
+Diagnosing Azure VM creation failures beyond the wizard's displayed error message
+Understanding Azure resource provider registration and its role in gating subscription functionality
+Navigating Azure Quotas to identify and request compute quota increases
+Recognizing fraud-prevention holds common to newly-upgraded Pay-As-You-Go subscriptions
+Filing a structured Azure support ticket (Basic/free tier) with correct scoping (deployment model, request type, region, quota, and target limit)
+Proactive cost management via Azure budget alerts before provisioning paid resources
+
+### Next steps
+
+Await quota approval, then deploy the Windows Server 2022 VM (ad-dc-01) in Canada Central on Standard_B2s
+RDP into the VM and promote it to a domain controller via Add Roles and Features → Active Directory Domain Services
+Cover core AD concepts: forest/domain creation, OU structure, user and group management, and basic Group Policy
+
