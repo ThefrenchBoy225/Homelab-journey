@@ -524,3 +524,17 @@ Completed a full, realistic Identity and Access Management workflow in a genuine
 - Move to the final domain in the roadmap: Active Directory — likely via a cloud-hosted Windows Server VM, since Apple Silicon doesn't support running Windows Server well locally
 - Consider connecting Entra ID conditional access concepts to the Access Control Policy written in Entry 13, since both cover the same underlying control area
 - Revisit Kali Linux later, possibly via a cloud VM or different hardware
+
+
+
+
+
+
+
+Entry 15: Active Directory Domain — Azure Provisioning Troubleshooting
+
+Started the final domain in the homelab project, Active Directory, which required moving off local UTM virtualization to a cloud-hosted Windows Server VM since Apple Silicon doesn't support Windows Server well locally. Began provisioning a Windows Server 2022 Datacenter VM (ad-dc-01) on Azure's free tier, targeting the B2ats v2 burstable size. Quickly hit a real constraint: Standard_B2ats_v2 is capped at 1 GiB of memory across every Azure region, which falls short of Windows Server 2022's minimum requirements for a Desktop Experience install, let alone running AD DS on top of it. Rather than gamble on a Server Core install with no GUI, decided to upgrade the subscription from Free Trial to Pay-As-You-Go to unlock properly-sized VM options like Standard_B2s (2 vCPU, 4 GiB), while budgeting for the small ongoing storage cost by planning to deallocate the VM between work sessions.
+
+The upgrade surfaced a second, less obvious issue: even after moving to Pay-As-You-Go, VM creation failed in every region tried (East US, East US 2, Canada Central) with a generic "subscription doesn't support VM creation" error. Diagnosed this down to two separate root causes. First, the Microsoft.Compute resource provider hadn't auto-registered on the new subscription, which was blocking quota data from loading at all — confirmed and fixed by manually registering it under Subscription > Resource providers. Second, once quota data became visible, the actual Standard Bsv2 Family vCPU quota was sitting at a hard 0 limit in every region, a common fraud-prevention hold on newly-upgraded PAYG accounts that doesn't always self-resolve via the standard in-portal quota request tool. Filed a formal support ticket (Basic/free tier) requesting an increase to 8 vCPUs for the Bsv2 family in Canada Central, choosing that region deliberately for lower latency going forward rather than continuing to guess across US regions.
+
+Key takeaway: cloud provisioning failures aren't always what the error message on the surface suggests. What looked like a simple "pick a different region" problem was actually a two-layer account provisioning issue (unregistered resource provider + zero quota allocation) that required drilling into Azure's Resource Providers and Quotas blades directly rather than trusting the Create VM wizard's error messaging. Ticket submitted; awaiting approval before the actual Windows Server deployment and AD DS promotion can proceed.
