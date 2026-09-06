@@ -591,7 +591,7 @@ Verified success directly in Server Manager → Local Server, confirming Domain:
 ### Result
 ad-dc-01 is now a fully functioning Active Directory domain controller for the homelab.local forest, running in Azure. The path here included a genuine mid-process error (installing the wrong role) that had to be diagnosed and reversed rather than a clean first-try execution — consistent with the troubleshooting theme carried over from Entry 15.
 
-Show Image
+   ![Server Manager confirming domain: homelab.local](./screenshots/entry16-domain-controller-confirmed.png)
 
 ### Skills practiced
 
