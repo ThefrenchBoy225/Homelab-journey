@@ -533,7 +533,7 @@ Completed a full, realistic Identity and Access Management workflow in a genuine
 
 ### Entry 15 — September 2026: Active Directory — Azure Provisioning Troubleshooting
 
-Goal: Begin the final domain in the plan, Active Directory, by provisioning a cloud-hosted Windows Server VM to serve as a domain controller — necessary since Apple Silicon doesn't support running Windows Server well locally. What followed was less about AD itself and more a real lesson in diagnosing cloud provisioning failures layer by layer.
+**Goal**: Begin the final domain in the plan, Active Directory, by provisioning a cloud-hosted Windows Server VM to serve as a domain controller — necessary since Apple Silicon doesn't support running Windows Server well locally. What followed was less about AD itself and more a real lesson in diagnosing cloud provisioning failures layer by layer.
 
 ### What I did
 
@@ -566,4 +566,47 @@ Proactive cost management via Azure budget alerts before provisioning paid resou
 Await quota approval, then deploy the Windows Server 2022 VM (ad-dc-01) in Canada Central on Standard_B2s
 RDP into the VM and promote it to a domain controller via Add Roles and Features → Active Directory Domain Services
 Cover core AD concepts: forest/domain creation, OU structure, user and group management, and basic Group Policy
+
+
+
+
+
+
+
+### Entry 16 — September 2026: Active Directory — Domain Controller Deployment
+
+**Goal** : Pick up where Entry 15 left off — resolve the outstanding Azure quota approval, complete the Windows Server 2022 VM deployment, and promote it to a working Active Directory domain controller.
+
+### What I did
+
+Confirmed the Azure support ticket (support request #2609040040008907) was approved, increasing the Bsv2 Family vCPU quota to 8 in Canada Central
+Rebuilt the VM through Azure's full (non-free-tier) Virtual Machines creation flow, since the "Free services" wizard is hardcoded to only offer 1 GiB memory sizes regardless of quota — selected Standard_B2s_v2 (2 vCPU, 8 GiB memory) after also switching Availability options to "No infrastructure redundancy required" to clear an unrelated zone-support conflict
+Deployed ad-dc-01 successfully in Canada Central running Windows Server 2022 Datacenter: Azure Edition, then connected via RDP using Microsoft's Windows App (formerly Remote Desktop)
+Installed the Active Directory Domain Services (AD DS) role through Server Manager — on the first attempt, mistakenly installed Active Directory Certificate Services (AD CS) instead due to the similarly-named roles sitting next to each other in the checklist
+Diagnosed the resulting failure during domain controller promotion: Windows blocks promotion outright when AD CS is present on the same server, since the two roles conflict
+Removed AD CS via the Remove Roles and Features wizard, restarted the server, then correctly installed AD DS (along with its automatically-bundled DNS Server and Group Policy Management tools)
+Successfully promoted the server via the Active Directory Domain Services Configuration Wizard: created a new forest with root domain homelab.local, set a DSRM password, and let the server reboot to complete promotion
+Verified success directly in Server Manager → Local Server, confirming Domain: homelab.local and the presence of a new DNS role (auto-installed alongside AD DS, since a domain controller must resolve its own domain)
+
+### Result
+ad-dc-01 is now a fully functioning Active Directory domain controller for the homelab.local forest, running in Azure. The path here included a genuine mid-process error (installing the wrong role) that had to be diagnosed and reversed rather than a clean first-try execution — consistent with the troubleshooting theme carried over from Entry 15.
+
+Show Image
+
+### Skills practiced
+
+Navigating Azure's full VM creation flow versus its restricted free-tier flow, and matching VM size to actual workload requirements (memory minimums for Windows Server Desktop Experience)
+Installing and removing Windows Server roles via Server Manager, including diagnosing a role conflict (AD CS vs. AD DS) from a failed prerequisites check rather than a vague error message
+Promoting a Windows Server to a domain controller: forest creation, DSRM password configuration, and understanding why DNS Server installs automatically alongside AD DS
+Verifying domain identity and DC status directly through Server Manager properties rather than assuming success from the installer alone
+
+### Next steps
+
+Build out an Organizational Unit (OU) structure in Active Directory Users and Computers (e.g., IT, Sales, HR) to mirror a real company hierarchy
+Create test user accounts within those OUs, extending the same account-provisioning pattern demonstrated in Entry 14 (Entra ID) to on-prem AD
+Create security groups and assign users to them
+Apply a basic Group Policy Object (GPO) linked to an OU — e.g., a password policy or desktop restriction — to demonstrate policy enforcement
+Set up Azure auto-shutdown on ad-dc-01 to control costs between work sessions
+
+
 
