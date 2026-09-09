@@ -610,3 +610,40 @@ Set up Azure auto-shutdown on ad-dc-01 to control costs between work sessions
 
 
 
+
+
+
+
+### Entry 17 — September 2026: Active Directory — OU Structure, Users, Groups, and Group Policy
+
+**Goal**: Build out a realistic organizational structure inside homelab.local — Organizational Units, test user accounts, security groups, and a working Group Policy Object — to demonstrate core AD administration beyond just standing up the domain controller.
+
+### What I did
+
+Created three Organizational Units under homelab.local in Active Directory Users and Computers: IT, Sales, and HR, mirroring a simple company department structure
+Created one test user in each OU (John Doe in IT, Jane Smith in Sales, and a third user in HR), following the same account-provisioning pattern used for the Entra ID test user in Entry 14, now applied on-prem
+Created a matching security group in each OU (IT-Team, Sales-Team, HR-Team) and added each OU's respective test user as a member, validating names via "Check Names" before applying
+Opened Group Policy Management and created a new GPO, Sales-Password-Policy, linked directly to the Sales OU only — not the domain root — to keep its effect scoped rather than domain-wide
+Edited the GPO under Computer Configuration → Policies → Windows Settings → Security Settings → Account Policies → Password Policy, and configured Minimum password length to require 10 characters
+Verified the GPO was correctly scoped by checking the Linked Group Policy Objects tab on the Sales OU (showing the policy active) versus IT and HR (showing no linked policies)
+
+
+### Result
+homelab.local now has a working, mini organizational structure: three OUs, three users, three matching security groups, and a real enforced password policy scoped to just one department. This demonstrates the full identity lifecycle on-prem — the same conceptual pattern as the cloud-based IAM work in Entry 14, but through native AD tooling (Active Directory Users and Computers and Group Policy Management) instead of Entra ID.
+
+![Sales OU showing the linked Sales-Password-Policy GPO](./screenshots/entry17-sales-gpo-linked.png)
+
+### Skills practiced
+
+Structuring Active Directory with Organizational Units to reflect departmental boundaries
+Creating and managing AD user accounts and security groups, including group membership assignment
+Building and linking a Group Policy Object to a specific OU rather than the domain root, to control policy scope precisely
+Navigating the Group Policy Management Editor to configure Account Policies (Password Policy)
+Verifying policy scope directly through the Group Policy Management console rather than assuming a link applied correctly
+
+### Next steps
+
+Extend Group Policy practice with a second policy type (e.g., a desktop/UI restriction) applied to a different OU, to contrast account policies vs. user-experience policies
+Explore Group Policy Modeling or Group Policy Results to simulate/verify policy application before deploying
+Consider nesting security groups (e.g., a broader "All-Staff" group containing the three department groups) to practice group nesting strategies
+Deallocate ad-dc-01 between sessions to continue managing Azure costs
