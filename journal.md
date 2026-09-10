@@ -646,4 +646,40 @@ Verifying policy scope directly through the Group Policy Management console rath
 Extend Group Policy practice with a second policy type (e.g., a desktop/UI restriction) applied to a different OU, to contrast account policies vs. user-experience policies
 Explore Group Policy Modeling or Group Policy Results to simulate/verify policy application before deploying
 Consider nesting security groups (e.g., a broader "All-Staff" group containing the three department groups) to practice group nesting strategies
-Deallocate ad-dc-01 between sessions to continue managing Azure costs
+
+
+
+
+
+
+
+### Entry 18 — September 2026: Active Directory — Second GPO and Group Policy Modeling
+
+**Goal**: Build a second Group Policy Object covering a different policy category than Entry 17's password policy, then use Group Policy Modeling to simulate and verify its effect before trusting it based on the link alone.
+
+### What I did
+
+Created a new GPO, HR-Restrict-ControlPanel, linked directly to the HR OU
+Configured it under User Configuration → Policies → Administrative Templates → Control Panel → Prohibit access to Control Panel and PC settings, set to Enabled — a User Configuration/Administrative Template setting, in contrast to Entry 17's Computer Configuration/Account Policy setting
+Verified correct linking in Group Policy Management: the HR OU's Linked Group Policy Objects tab shows HR-Restrict-ControlPanel (Link Enabled: Yes, GPO Status: Enabled), while Sales shows only its own Sales-Password-Policy — confirming no cross-department bleed
+Ran the Group Policy Modeling Wizard, simulating policy application for the HR OU container (OU=HR,DC=homelab,DC=local) against the domain
+Reviewed the generated simulation report and confirmed under Applied GPOs that only HR-Restrict-ControlPanel applies to HR, with an empty Denied GPOs section and the Control Panel policy showing "Winning GPO: HR-Restrict-ControlPanel"
+
+### Result
+Two GPOs are now active in homelab.local, each correctly isolated to its own department: a password policy on Sales, and a Control Panel restriction on HR. Rather than relying solely on the Linked Group Policy Objects view to confirm scope, I used Group Policy Modeling to simulate actual policy application — a more rigorous verification step that mirrors how a real admin would test a policy's effect before rolling it out, not just trust that a link was created correctly.
+
+![HR OU showing the linked HR-Restrict-ControlPanel GPO](./screenshots/entry18-hr-gpo-linked.png)
+
+![Group Policy Modeling report confirming HR-Restrict-ControlPanel as the only applied GPO for HR, with the Control Panel setting enabled](./screenshots/entry18-gpo-modeling-report.png)
+
+### Skills practiced
+
+Configuring a User Configuration / Administrative Templates policy, distinct from the Account Policies used in Entry 17
+Verifying GPO scope two ways: statically (Linked Group Policy Objects) and dynamically (Group Policy Modeling simulation)
+Reading a Group Policy Modeling report — Applied GPOs, Denied GPOs, and per-setting "Winning GPO" attribution
+Understanding why simulating a policy's effect is a stronger verification step than trusting a link alone
+
+### Next steps
+
+Consider nesting security groups (e.g., an "All-Staff" group containing IT-Team, Sales-Team, HR-Team) to practice group nesting strategies
+Explore Group Policy Results (as opposed to Modeling) to check actual applied policy on a live logged-in session, rather than a simulation
