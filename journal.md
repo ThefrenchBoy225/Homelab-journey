@@ -762,4 +762,4 @@ Understanding permission inheritance through nested security groups in a real, t
 
 Repeat the Effective Access check for a user in a different department (e.g., Jane Smith via Sales-Team) to confirm the same inheritance holds across all three nested groups.
 Consider documenting the full homelab.local structure (OUs, groups, GPOs, and now folder permissions) as a single reference diagram
-Deallocate ad-dc-01 between sessions to continue managing Azure costs
+Deallocate ad-dc-01 between sessions to continue managing Azure costs 
