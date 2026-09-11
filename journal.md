@@ -711,10 +711,10 @@ homelab.local now has a two-level group structure: three department-level securi
 
 ### Skills practiced
 
-Running and interpreting Group Policy Results (RSoP) as a live-session verification tool, distinct from the simulation-based Group Policy Modeling used in Entry 18
-Understanding why a given OU's policy report may correctly show no department GPOs, based on OU membership rather than assuming something is broken
-Building nested security groups to reflect a departmental hierarchy
-Troubleshooting an AD object lookup failure caused by a hidden extra character, and resolving it with a more reliable method (Advanced search) rather than repeatedly retyping the same failing input
+Running and interpreting Group Policy Results (RSoP) as a live-session verification tool, distinct from the simulation-based Group Policy Modeling used in Entry 18.
+Understanding why a given OU's policy report may correctly show no department GPOs, based on OU membership rather than assuming something is broken.
+Building nested security groups to reflect a departmental hierarchy.
+Troubleshooting an AD object lookup failure caused by a hidden extra character, and resolving it with a more reliable method (Advanced search) rather than repeatedly retyping the same failing input.
 
 ### Next steps
 
@@ -722,3 +722,44 @@ Apply a permission or policy scoped to the All-Staff group to demonstrate the ne
 Consider documenting the full homelab.local structure (OUs, groups, GPOs) as a single reference diagram to accompany the write-ups
 
 
+
+
+
+
+
+
+
+Entry 20 — September 2026: Active Directory — Verifying Nested Group Permissions
+
+**Goal**: Prove that the nested security group structure built in Entry 19 (All-Staff containing IT-Team, Sales-Team, HR-Team) actually cascades permissions down to individual users, rather than just existing as an organizational structure on paper.
+
+### What I did
+
+Created a shared folder, C:\CompanyShare, on ad-dc-01 as a test target for permission inheritance.
+Opened the folder's Security properties and granted the All-Staff group Full Control — a single permission grant at the top of the nesting hierarchy, rather than assigning access to each department group individually.
+Worked around an unresponsive checkbox in the basic Security tab by using Advanced Security Settings instead, confirming All-Staff's Full Control entry was correctly applied there.
+Used the Effective Access tab under Advanced Security Settings to check what John Doe (a member of IT-Team, nested inside All-Staff) actually has on the folder — without granting him anything directly.
+Confirmed the Effective Access report shows John Doe with Full Control, along with Traverse folder/execute file, List folder/read data, and Read attributes — inherited entirely through the IT-Team → All-Staff → CompanyShare chain
+
+### Result
+
+The nested group structure from Entry 19 isn't just organizational scaffolding — it functionally cascades real permissions. 
+Granting Full Control to All-Staff once was sufficient to give every user across IT, Sales, and HR access to the shared folder, verified concretely through Windows' own Effective Access calculator rather than assumed from the group membership alone. 
+This is the same underlying principle behind managing access at scale in a real organization: grant permissions to groups, not individuals, and let nesting handle the rest.
+
+![Effective Access report for John Doe on C:\CompanyShare, showing Full Control inherited via IT-Team's nested membership in All-Staff](./screenshots/entry20-effective-access-johndoe.png)
+
+
+
+### Skills practiced
+
+Applying folder-level NTFS permissions to a security group rather than individual users.
+Navigating Advanced Security Settings when the basic Security tab's permission checkboxes become unresponsive.
+Using the Effective Access tool to verify actual, inherited permissions for a specific user — a genuine diagnostic step rather than trusting the group hierarchy by inspection alone.
+Understanding permission inheritance through nested security groups in a real, testable scenario.
+
+### Next steps
+
+Repeat the Effective Access check for a user in a different department (e.g., Jane Smith via Sales-Team) to confirm the same inheritance holds across all three nested groups.
+Consider documenting the full homelab.local structure (OUs, groups, GPOs, and now folder permissions) as a single reference diagram
+Deallocate ad-dc-01 between sessions to continue managing Azure costs
