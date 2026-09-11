@@ -683,3 +683,42 @@ Understanding why simulating a policy's effect is a stronger verification step t
 
 Consider nesting security groups (e.g., an "All-Staff" group containing IT-Team, Sales-Team, HR-Team) to practice group nesting strategies
 Explore Group Policy Results (as opposed to Modeling) to check actual applied policy on a live logged-in session, rather than a simulation
+
+
+
+
+
+
+### Entry 19 — September 2026: Active Directory — Group Policy Results and Nested Security Groups
+
+**Goal**: Round out the AD administration work by using Group Policy Results to check real (not simulated) policy application, and by building a nested security group structure across the existing departments.
+
+### What I did
+
+Ran the Group Policy Results Wizard against labadmin on ad-dc-01 — unlike Group Policy Modeling (which simulates), this tool reports what has actually been applied to a real, logged-on session
+Confirmed both the last computer policy refresh and user policy refresh completed with No Errors Detected, and reviewed Component Status showing successful Group Policy Infrastructure, Registry, and Security processing
+Noted that labadmin sits in the homelab.local/Domain Controllers OU, so neither Sales-Password-Policy nor HR-Restrict-ControlPanel appear in this report — correctly reflecting that neither GPO targets that OU
+Created a new security group, All-Staff, intended as a nested parent group over the three department groups
+Hit a naming issue when adding members by typing names directly — a stray space in "IT-Team" (auto-inserted while typing) caused a "Name Not Found" error that a straight retype didn't resolve
+Worked around it using the Advanced → Find Now search interface instead of typing names manually, then Ctrl-selecting all three groups at once — added IT-Team, Sales-Team, and HR-Team as members of All-Staff without further issues
+
+### Result
+homelab.local now has a two-level group structure: three department-level security groups (IT-Team, Sales-Team, HR-Team) nested inside a single umbrella group (All-Staff). This mirrors a common real-world pattern — granting a permission or applying a policy to All-Staff would cascade to every user across all three departments without needing to manage them individually. Group Policy Results also confirmed, using live session data rather than simulation, that GPOs are applying exactly where expected and nowhere else.
+
+![Group Policy Results report for labadmin on ad-dc-01, showing successful computer and user policy refresh with no errors](./screenshots/entry19-gpo-results-labadmin.png)
+
+![All-Staff group Members tab showing IT-Team, Sales-Team, and HR-Team nested as members](./screenshots/entry19-all-staff-nested-groups.png)
+
+### Skills practiced
+
+Running and interpreting Group Policy Results (RSoP) as a live-session verification tool, distinct from the simulation-based Group Policy Modeling used in Entry 18
+Understanding why a given OU's policy report may correctly show no department GPOs, based on OU membership rather than assuming something is broken
+Building nested security groups to reflect a departmental hierarchy
+Troubleshooting an AD object lookup failure caused by a hidden extra character, and resolving it with a more reliable method (Advanced search) rather than repeatedly retyping the same failing input
+
+### Next steps
+
+Apply a permission or policy scoped to the All-Staff group to demonstrate the nesting actually cascades as expected
+Consider documenting the full homelab.local structure (OUs, groups, GPOs) as a single reference diagram to accompany the write-ups
+
+
