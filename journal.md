@@ -794,3 +794,47 @@ All three departments — IT, Sales, and HR — correctly inherit Full Control o
 Document the full homelab.local structure (OUs, users, groups, GPOs, and folder permissions) as a single reference diagram to tie together Entries 16–21
 Consider a final AD entry covering account lockout policy or auditing (e.g., enabling and reviewing security event logs for a simulated failed logon)
 Deallocate ad-dc-01 between sessions to continue managing Azure costs
+
+
+
+
+
+
+### Entry 22 — September 2026: Active Directory — Account Lockout Policy and Security Auditing
+
+**Goal**: Close out the Active Directory series with a security-monitoring scenario — configure an account lockout policy, trigger a real lockout event, and verify it through Windows Security Event Log analysis, tying the AD work back to the log-analysis and incident-response skills built earlier in this homelab.
+
+### What I did
+
+Edited the Default Domain Policy under Computer Configuration → Policies → Windows Settings → Security Settings → Account Policies → Account Lockout Policy, setting Account lockout threshold to 3 invalid attempts (accepting Windows' auto-suggested lockout duration and reset counter defaults).
+Opened a second, separate RDP connection to ad-dc-01 (same IP, distinct from my existing admin session) and deliberately attempted to log in as John Doe (HOMELAB\jdoe) using an incorrect password multiple times.
+Switched to my original admin session and opened Event Viewer → Windows Logs → Security to review the resulting audit trail
+Located Event ID 4625 ("An account failed to log on"), Task Category: Account Lockout, confirming the failed authentication attempts were logged.
+Located Event ID 4740 ("A user account was locked out"), Task Category: User Account Management, Keywords: Audit Success, timestamped a few seconds before the 4625 entry I'd found first — confirming the lockout itself was recorded the moment the threshold was crossed, with 4625 entries continuing to log as further attempts hit the now-locked account.
+
+
+
+### Result
+
+The full loop — configure a policy, trigger a real security event through an actual failed-authentication scenario, then verify it via log analysis rather than trusting the policy "worked" by assumption — is now demonstrated in homelab.local. 
+This closes out the Active Directory portion of the homelab on a security-monitoring note rather than a purely structural one, connecting directly back to the SIEM and incident-response work from earlier entries in this project.
+
+
+
+![Event 4625 details showing a failed logon attempt for the John Doe account, Task Category: Account Lockout](./screenshots/entry22-event-4625-failedlogon.png)
+
+![Event 4740 details confirming the John Doe account lockout, logged via Windows Security auditing](./screenshots/entry22-event-4740-lockout.png)
+
+### Skills practiced
+
+Configuring Account Lockout Policy via Default Domain Policy
+Deliberately triggering a security event to test policy enforcement, rather than only configuring settings and assuming correctness
+Navigating Windows Event Viewer's Security log to locate and interpret specific Event IDs (4625, 4740)
+
+
+
+### Next steps
+
+Consider forwarding these Security events to the SIEM stack (Wazuh/Splunk/ELK) built earlier in the homelab, to unify cloud AD auditing with the existing on-prem log monitoring
+Document the complete homelab.local structure (OUs, groups, GPOs, folder permissions, and now auditing) as a capstone reference for the Active Directory domain
+Deallocate ad-dc-01 between sessions to continue managing Azure costs
