@@ -763,3 +763,34 @@ Understanding permission inheritance through nested security groups in a real, t
 Repeat the Effective Access check for a user in a different department (e.g., Jane Smith via Sales-Team) to confirm the same inheritance holds across all three nested groups.
 Consider documenting the full homelab.local structure (OUs, groups, GPOs, and now folder permissions) as a single reference diagram
 Deallocate ad-dc-01 between sessions to continue managing Azure costs 
+
+
+
+
+
+
+### Entry 21 — September 2026: Active Directory — Confirming Nested Permissions Across All Departments
+
+**Goal**: Complete the verification started in Entry 20 by checking Effective Access for a user in each of the three department groups, not just IT, to confirm the nested permission structure holds consistently across the entire organization.
+
+### What I did
+
+Returned to C:\CompanyShare → Advanced Security Settings → Effective Access tab
+Checked effective access for Jane Smith (jsmith@homelab.local), a member of Sales-Team, and confirmed Full Control — inherited via Sales-Team → All-Staff, with no permission granted to her account directly
+Repeated the same check for the HR test user (member of HR-Team) and confirmed the identical result: Full Control inherited via HR-Team → All-Staff
+Combined with the John Doe (IT-Team) result from Entry 20, this covers all three department groups nested under All-Staff
+
+
+### Result
+
+All three departments — IT, Sales, and HR — correctly inherit Full Control on the shared folder purely through their nested group membership. This closes out the verification loop started in Entry 20: rather than checking one example and assuming the pattern holds, each branch of the nested structure was individually confirmed using Windows' Effective Access tool. The full identity and access chain — OUs, users, department groups, a nested umbrella group, and folder-level permission inheritance — is now built and verified end-to-end in homelab.local.
+
+![Effective Access report for Jane Smith on C:\CompanyShare, showing Full Control inherited via Sales-Team's nested membership in All-Staff](./screenshots/entry21-effective-access-janesmith.png)
+
+
+
+### Next steps
+
+Document the full homelab.local structure (OUs, users, groups, GPOs, and folder permissions) as a single reference diagram to tie together Entries 16–21
+Consider a final AD entry covering account lockout policy or auditing (e.g., enabling and reviewing security event logs for a simulated failed logon)
+Deallocate ad-dc-01 between sessions to continue managing Azure costs
