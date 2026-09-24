@@ -838,3 +838,53 @@ Navigating Windows Event Viewer's Security log to locate and interpret specific 
 Consider forwarding these Security events to the SIEM stack (Wazuh/Splunk/ELK) built earlier in the homelab, to unify cloud AD auditing with the existing on-prem log monitoring
 Document the complete homelab.local structure (OUs, groups, GPOs, folder permissions, and now auditing) as a capstone reference for the Active Directory domain
 Deallocate ad-dc-01 between sessions to continue managing Azure costs
+
+
+
+
+
+
+
+
+
+### Entry 23 — September 2026: Live SIEM Integration — Forwarding Active Directory Security Events to Splunk Cloud
+
+**Goal**: Follow through on the SIEM integration idea from Entry 22's next steps — get ad-dc-01's Windows Security event log genuinely flowing into a SIEM platform, rather than settling for a documented architecture alone.
+
+### What I did
+
+- Started by attempting to reconnect to the Wazuh Cloud environment used earlier in this homelab, but found the trial had expired with no new trial available until November — ruled that path out for now.
+- Considered forwarding to the local ELK VM instead, but concluded it likely isn't reachable from Azure without extra networking (port forwarding or a VPN), and decided against standing up a second paid Azure VM just to self-host Wazuh.
+- Opened a fresh Splunk Cloud free trial (prd-p-n6vxx.splunkcloud.com) as a more practical path, since Azure can reach Splunk Cloud's public endpoint directly with no extra networking.
+- Downloaded the Splunk Universal Forwarder (64-bit, Windows Server 2019/2022/2025) and the environment's customized forwarder credentials package (splunkclouduf.spl) — both downloaded from inside the ad-dc-01 RDP session itself to avoid a cross-machine file transfer, working around an Edge SmartScreen block on the unfamiliar .spl file type.
+- Installed the Universal Forwarder via its MSI installer, then applied the credentials package through the Splunk CLI (splunk install app "...\splunkclouduf.spl" -auth admin:<password>), which configures the forwarder's connection to Splunk Cloud.
+- Verified the connection succeeded with splunk list forward-server, confirming an active forward to inputs.prd-p-n6vxx.splunkcloud.com:9997 (ssl).
+- Diagnosed why no Security log data was arriving despite a working connection: a manually created inputs.conf file (needed to tell the forwarder to monitor the Windows Security event channel) had been saved with a truncated filename by Notepad, and a second attempt produced a malformed single-line file due to a multi-line echo syntax error.
+- Rebuilt inputs.conf correctly using individual echo commands (> to create, >> to append) to produce a valid [WinEventLog://Security] stanza, then restarted the forwarder.
+- Confirmed success in Splunk Cloud's Search & Reporting app: a broad search (index=* host="ad-dc-01*") returned 33,615 events, including EventCodes 4688, 4702, and others, sourced from WinEventLog:Security.
+- Narrowed the search to the specific events generated in Entry 22 (EventCode=4625 OR EventCode=4740) and confirmed 14 matching events, including entries timestamped back to the original account lockout test — meaning the forwarder picked up existing Windows Event Log history, not just newly generated events.
+
+
+
+### Result
+
+ad-dc-01's Windows Security event log is now live-forwarding to Splunk Cloud, closing the loop originally planned back in Entry 22: a security control was configured, a real event was generated, and now that event is verifiably searchable inside an actual SIEM platform — not a simulated or documented pipeline, but a working one, complete with the original historical account lockout events retrieved alongside ongoing data. Getting here required troubleshooting a real infrastructure decision (which SIEM was actually reachable from Azure) and a handful of genuinely fiddly CLI and file-encoding issues along the way, rather than a clean first-try setup.
+
+
+![Splunk Cloud search confirming 14 matching events for EventCode=4625 and 4740 from host ad-dc-01, including historical entries from the original Entry 22 lockout test](./screenshots/entry23-splunk-search-4625-4740.png)
+
+
+
+### Skills practiced
+
+- Evaluating SIEM platform reachability from cloud infrastructure (Azure) and choosing a practical path over a blocked one, rather than forcing a workaround with unnecessary cost or complexity.
+- Installing and configuring the Splunk Universal Forwarder on Windows, including applying a Splunk Cloud credentials package via the CLI.
+- Diagnosing a forwarder connectivity issue by isolating it into two separate questions — is the destination configured correctly, and is the right data source being monitored — rather than treating "no data arriving" as one undifferentiated problem.
+- Troubleshooting Windows file-handling quirks (Notepad filename truncation, Command Prompt multi-line redirection syntax) that silently produced invalid configuration files.
+- Verifying a SIEM integration end-to-end: connection status, broad data ingestion, and a targeted search for specific, previously-known events
+
+## Next steps
+
+- Explore building a basic Splunk dashboard or saved search/alert around Account Lockout events (EventCode 4740), turning this raw data into an actual monitoring use case.
+- Consider forwarding additional event channels beyond Security (e.g., System or Application logs) for broader visibility.
+- Deallocate ad-dc-01 between sessions to continue managing Azure costs.
