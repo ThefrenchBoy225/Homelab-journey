@@ -888,3 +888,152 @@ ad-dc-01's Windows Security event log is now live-forwarding to Splunk Cloud, cl
 - Explore building a basic Splunk dashboard or saved search/alert around Account Lockout events (EventCode 4740), turning this raw data into an actual monitoring use case.
 - Consider forwarding additional event channels beyond Security (e.g., System or Application logs) for broader visibility.
 - Deallocate ad-dc-01 between sessions to continue managing Azure costs.
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 24: Building a Detection Use Case in Splunk Cloud: Lockouts, Brute Force, and a Disproven Assumption
+
+### Overview
+
+In Entry 23, I connected my Active Directory domain controller (ad-dc-01, Windows Server 2022 in Azure) to Splunk Cloud using the Universal Forwarder, and confirmed that Windows Security logs were flowing in. Collecting logs is only half of a SIEM's job, though. The goal of this entry was to turn that raw data into a working monitoring use case: saved reports, a dashboard, and a scheduled alert that detects brute-force attempts against domain accounts.
+
+Along the way, I triaged historical failed logons, formed a hypothesis about how Windows protects the built-in Administrator account, tested that hypothesis live, watched it fail, recovered the locked account through an out-of-band management channel, and confirmed that my detections caught every step.
+
+### Step 1: Verifying the Pipeline After a Restart
+
+I deallocate ad-dc-01 between sessions to control Azure costs, so the first check was whether the forwarder would reconnect on its own after the VM restarted. Running `splunk list forward-server` from the forwarder's bin directory showed an active SSL forward to my Splunk Cloud input on port 9997, with nothing listed as inactive. A search over the last 15 minutes returned more than 1,700 Security events, the newest arriving within seconds of the search, which confirmed the pipeline survived the deallocation without any manual intervention.
+
+### Step 2: Account Lockout Report (EventCode 4740)
+
+My first saved report tracks account lockouts:
+
+```spl
+host=ad-dc-01* source="WinEventLog:Security" EventCode=4740
+| eval Locked_Account=mvindex(Account_Name,1), Locked_SID=mvindex(Security_ID,1)
+| table _time, Locked_Account, Locked_SID
+| sort -_time
+```
+
+A 4740 event contains two accounts. The first, under "Subject," is the account that performed the lockout, which on a domain controller is the DC's own computer account (`ad-dc-01$`) running as SYSTEM. The second, under "Account That Was Locked Out," is the victim. Splunk extracts both into a multivalue field, so `mvindex(..., 1)` pulls out the locked account and its SID specifically.
+
+I originally included the Caller Computer Name field, but it came back empty. Rather than assuming the search was broken, I expanded the raw event and confirmed the field was blank in the original Windows log itself, so I removed it from the report. The failed logons behind the lockout had originated directly against the DC rather than from another workstation, which is a common reason for that field to be empty.
+
+### Step 3: Failed Logons by Source (EventCode 4625)
+
+My second report groups failed logons by target account and source IP:
+
+```spl
+host=ad-dc-01* source="WinEventLog:Security" EventCode=4625
+| eval Target_Account=mvindex(Account_Name,1)
+| stats count AS Failed_Logons, latest(_time) AS Last_Attempt by Target_Account, Source_Network_Address
+| convert ctime(Last_Attempt)
+| sort -Failed_Logons
+```
+
+![Failed logons by source](screenshots/entry24-01-failed-logons-by-source.png)
+
+The results showed 13 historical failures: 4 against jdoe (my deliberate lockout test from Entry 22) and 9 against labadmin. Because ad-dc-01 is an Azure VM reachable over RDP, I checked whether any of these came from unknown internet sources. All 13 came from a single IP, which I verified was my own home public IP. I triaged the activity as benign: jdoe's failures were the planned test, and labadmin's were my own mistyped passwords over RDP. (My public IP is redacted in all screenshots.)
+
+### Step 4: Investigating Why labadmin Was Never Locked Out
+
+The triage raised a question: jdoe was locked out after 4 failures, but labadmin had 9 failures and was never locked out. I suspected labadmin had become the domain's built-in Administrator when the VM was promoted to a domain controller, and I knew that account has historically been exempt from lockout so that an attacker can't lock the only admin out of a domain.
+
+My first attempt to confirm the SID through Splunk returned `S-1-0-0` for every failed logon. That is the NULL SID, which Windows writes into 4625 events because the logon fails before the account is resolved to its real SID. This was a useful lesson: not every field in an event contains what its name suggests. Running `whoami /user` directly on the DC gave the real answer:
+
+![whoami showing RID 500](screenshots/entry24-02-whoami-rid-500.png)
+
+The SID ends in **-500**, confirming labadmin is the domain's built-in Administrator. The part before the final number is the domain identifier, shared with jdoe's SID (which ends in -1601). The final number, the RID, identifies the specific account.
+
+### Step 5: The Brute-Force Alert
+
+If the built-in Administrator can't be locked out, detection has to fill that gap. I built a scheduled alert that fires when any account records 5 or more failed logons in a 15-minute window:
+
+```spl
+host=ad-dc-01* source="WinEventLog:Security" EventCode=4625
+| eval Target_Account=mvindex(Account_Name,1)
+| stats count AS Failed_Logons, values(Source_Network_Address) AS Source_IPs by Target_Account
+| where Failed_Logons >= 5
+```
+
+The alert runs every 15 minutes (cron `*/15 * * * *`) over the last 15 minutes, triggers when the number of results is greater than zero, and adds a High-severity entry to Triggered Alerts. Because the search window matches the schedule, consecutive runs cover back-to-back windows without overlap, so throttling isn't needed to prevent duplicate alerts.
+
+![Alert settings](screenshots/entry24-03-brute-force-alert-settings.png)
+
+### Step 6: Testing the Alert, and Disproving My Hypothesis
+
+Since I believed labadmin couldn't be locked out, it seemed like the safe account to test with. I signed out of RDP and entered the wrong password several times. On the next connection attempt, I got this:
+
+![RDP lockout error](screenshots/entry24-04-rdp-lockout-error-0xd07.png)
+
+Error 0xd07 means the account is locked. My hypothesis was wrong: in this environment, the built-in Administrator **can** be locked out. Microsoft has changed built-in Administrator lockout behavior in recent Windows versions, so the long-standing assumption that it is exempt doesn't hold everywhere. The more likely reason the earlier 9 failures didn't trigger a lockout is that they were spread out enough for the lockout counter to reset between attempts. I've noted that as a hypothesis for future verification rather than a confirmed conclusion.
+
+Splunk confirmed the lockout, with the labadmin account (-500) appearing directly above jdoe's lockout from Entry 22:
+
+![Lockout report showing labadmin](screenshots/entry24-05-lockout-report-labadmin.png)
+
+The key lesson is that I treated a widely repeated rule as fact, and a controlled test proved otherwise. Testing assumptions in a lab, rather than in production, is exactly what a lab is for.
+
+### Step 7: Recovering Through an Out-of-Band Channel
+
+With the only domain admin account locked, I couldn't sign in over RDP. Instead of waiting out the lockout duration, I used Azure's Run Command feature (Operations → Run command → RunPowerShellScript), which executes scripts on the VM through the Azure VM agent without needing any login:
+
+```powershell
+Unlock-ADAccount -Identity labadmin
+Get-ADUser labadmin -Properties LockedOut | Select Name, LockedOut
+```
+
+The output confirmed `LockedOut: False`, and I was able to reconnect normally. Recovering a locked-out administrator through an out-of-band management path is a real-world sysadmin skill, and it's why cloud and on-premises environments keep a management channel that doesn't depend on normal authentication.
+
+The unlock itself was recorded in the domain controller's Security log as EventCode 4767 ("A user account was unlocked"). By the time I wrote this up, my Splunk Cloud trial had ended, so I retrieved the event directly from the DC, again through Run Command and without logging in:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4767} -MaxEvents 5 |
+  Format-List TimeCreated, Message
+Get-ADUser labadmin -Properties LockedOut | Select Name, LockedOut
+```
+
+![4767 unlock event retrieved through Azure Run Command](screenshots/entry24-09-azure-4767-unlock.png)
+
+The event shows labadmin (SID ending in -500) unlocked at 19:19:53 UTC, and the account still shows `LockedOut: False`. The Subject is the DC's own computer account (`ad-dc-01$`, SID S-1-5-18, which is SYSTEM) rather than a named user, because Run Command executes scripts as SYSTEM through the Azure VM agent. That is an important detail for an analyst: an unlock performed through an out-of-band management tool doesn't show a person's name in the audit trail, so it has to be correlated with the cloud platform's own activity logs to know who initiated it.
+
+### Step 8: Confirming the Alert Fired
+
+The scheduled alert triggered at 19:19:06 UTC, a few minutes after the lockout at 19:14:28 and 47 seconds before I unlocked the account at 19:19:53. In other words, the detection fired while the account was still locked, before recovery:
+
+![Alert trigger history](screenshots/entry24-06-alert-trigger-history.png)
+
+The alert results showed labadmin with exactly 5 failed logons from a single source IP:
+
+![Alert results](screenshots/entry24-07-alert-results-5-failures.png)
+
+One detail stood out: the search window was exactly **19:00:00 to 19:15:00**, even though the scheduler dispatched the search at 19:19. Splunk calculates the relative time range from the scheduled time rather than the actual run time, so a delayed run doesn't create gaps between windows. The remaining edge case is indexing lag. An event generated seconds before a run might reach Splunk after that run has already searched, which is why production alerts often search a slightly wider window and use throttling to avoid double-counting.
+
+### Step 9: The AD Security Monitoring Dashboard
+
+I combined both reports into a single dashboard:
+
+![AD Security Monitoring dashboard](screenshots/entry24-08-ad-security-monitoring-dashboard.png)
+
+The dashboard shows labadmin with 15 failed logons in total: the 9 historical failures, the 5 from my test, and 1 more at 19:16:15, about two minutes after the lockout. That last one is an attempt made while the account was already locked. Windows still logs those as 4625 events, with a failure reason indicating the account is locked, which lets an analyst distinguish between active password guessing and repeated attempts against an account that's already locked.
+
+### Lessons Learned
+
+The most important lesson from this entry is to verify assumptions instead of trusting them. Three times, a field or rule behaved differently than expected: the Caller Computer Name was genuinely blank, the 4625 SID field held the NULL SID rather than the real account SID, and the built-in Administrator could be locked out despite the common belief that it can't. Each time, checking the raw data or running a controlled test gave the real answer.
+
+I also practiced a complete triage workflow on real data. I identified repeated failures, traced them to a source IP, attributed that IP to a known legitimate source, and closed the activity as benign before building detections for the future.
+
+Finally, the full detection chain now works end to end: an attack on the domain controller is logged by Windows, forwarded to Splunk Cloud, detected by a scheduled search, raised as a High-severity alert, and visible on a dashboard, and the recovery action is captured in the same audit trail.
+
+### Next Steps
+
+For future entries, I plan to forward additional Windows event channels (System and Application) beyond Security, investigate the lockout counter reset window to confirm why the earlier labadmin failures didn't cause a lockout, and consider hardening the built-in Administrator account by creating a separate named admin account for daily use.
