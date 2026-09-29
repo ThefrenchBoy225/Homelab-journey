@@ -1037,3 +1037,183 @@ Finally, the full detection chain now works end to end: an attack on the domain 
 ### Next Steps
 
 For future entries, I plan to forward additional Windows event channels (System and Application) beyond Security, investigate the lockout counter reset window to confirm why the earlier labadmin failures didn't cause a lockout, and consider hardening the built-in Administrator account by creating a separate named admin account for daily use.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 25: Auditing My Own Domain: Lockout History, a Password Policy That Never Worked, and a Proper Admin Account
+
+### Overview
+
+Entry 24 ended with two loose ends. I still didn't know for certain why my admin account (labadmin) had failed to log on 9 times without ever being locked out, and the test that disproved my first theory revealed a bigger problem: I was doing all my daily work with the domain's built-in Administrator account. This entry closes both loops. Along the way, I found that a password policy I configured back in Entry 17 had never actually applied to anyone, fixed it the correct way, created a separate named admin account, and troubleshot a sign-in failure that turned out to be a classic help desk problem.
+
+Before starting, I also made one change to keep the lab affordable.
+
+### Step 1: Cutting Cloud Costs Before Touching Anything
+
+With my Splunk trial ended, I checked Azure Cost Management to see what the lab was actually costing me.
+
+![Azure cost breakdown](screenshots/entry25-01-azure-cost-breakdown.png)
+
+The result surprised me. Of the CA$27.20 spent in September, the virtual machine's compute cost was only CA$1.87, because I deallocate ad-dc-01 between sessions. Almost all of the cost came from resources that bill around the clock whether the VM is running or not: the Premium SSD OS disk (CA$21.41) and the static public IP address (CA$3.92). Deallocating the VM had already done everything it could; the disk was the real lever.
+
+Azure had created the OS disk as Premium SSD, which is designed for production workloads. With the VM deallocated, I changed it to Standard SSD under the disk's Size + performance settings. The disk kept its 127 GiB size and all of its data, including the entire domain.
+
+![OS disk now Standard SSD](screenshots/entry25-02-os-disk-standard-ssd.png)
+
+The lesson: stopping a VM isn't the same as stopping its costs. Storage and reserved IPs keep billing, so right-sizing those matters more for an intermittently used lab than compute does.
+
+### Step 2: Reading the Actual Lockout Policy
+
+To explain labadmin's history, I first needed the exact lockout settings rather than my memory of them.
+
+```powershell
+Get-ADDefaultDomainPasswordPolicy
+```
+
+![Domain password policy](screenshots/entry25-03-domain-password-policy.png)
+
+The domain locks accounts after **3** failed attempts within a **10-minute** observation window, for a **10-minute** duration. This also explained the Entry 24 numbers: with a threshold of 3, accounts were actually locked on their third failure, and any further attempts against the already-locked account were still logged as 4625 events, which is why the logged failure counts were higher than 3.
+
+### Step 3: Testing My Theory Against the Logs
+
+My working theory was that labadmin's 9 failures had been spread out enough for the counter to reset between them. Instead of assuming, I pulled every labadmin failure from the domain controller's own Security log, stopping just before the Entry 24 test:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625; EndTime=[datetime]'2026-09-25 19:00'} |
+  Where-Object { $_.Properties[5].Value -eq 'labadmin' } |
+  Sort-Object TimeCreated | Select-Object TimeCreated
+```
+
+![labadmin failure history](screenshots/entry25-04-labadmin-failure-history.png)
+
+The theory didn't hold. Six of the failures happened on September 10 between 4:41 and 4:44 PM, six failures in about three minutes. Under the current policy, that would have locked the account twice over. I also confirmed the Security log's oldest entry predated the lab entirely, so no events had been overwritten.
+
+That pointed to a different explanation: maybe the lockout policy didn't exist yet on September 10. Domain controllers record policy changes as EventCode 4739, so I checked:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4739} |
+  Sort-Object TimeCreated | Format-List TimeCreated, Message
+```
+
+![4739 lockout policy set on September 15](screenshots/entry25-05-4739-lockout-policy-set.png)
+
+The event shows "Lockout Policy modified" on September 15 at 7:00:16 PM, setting the threshold to 3. That's about six and a half minutes before the jdoe lockout test from Entry 22, which matches my Entry 22 workflow exactly. Before that moment, the domain used the Windows default threshold of 0, meaning accounts never lock. Every one of labadmin's earlier failures happened before the policy existed, and the single failure on September 24 was below the threshold.
+
+It took two disproven theories to reach the real answer. The change is attributed to `ad-dc-01$` (SYSTEM) rather than to me, because I edited a Group Policy Object and it was the domain controller's Group Policy engine that applied the setting to the domain.
+
+### Step 4: Discovering a Password Policy That Never Applied
+
+The same policy output contained a second finding: **MinPasswordLength: 7**. In Entry 17, I created a Sales-Password-Policy GPO requiring 10 characters and linked it to the Sales OU, and Group Policy Modeling showed it as applied. It never affected domain users.
+
+In Active Directory, password and lockout policies for domain accounts come only from a GPO linked at the domain level. Password settings in an OU-linked GPO only affect local accounts on computers in that OU. This is a very common misconception, and I had documented it as working. The correct tool for giving one group a different password policy is a **Fine-Grained Password Policy** (a Password Settings Object, or PSO), which applies directly to users or groups.
+
+### Step 5: Creating a Fine-Grained Password Policy
+
+One detail matters when creating a PSO: it **replaces** the entire domain password and lockout policy for the users it applies to, rather than adding to it. If I had set only the minimum length, Sales users would have received default values for everything else, including a lockout threshold of 0, silently removing their lockout protection. So I set every value explicitly, matching the domain policy except for the 10-character minimum:
+
+```powershell
+New-ADFineGrainedPasswordPolicy -Name "Sales-PSO" -Precedence 10 -MinPasswordLength 10 -ComplexityEnabled $true -PasswordHistoryCount 24 -MaxPasswordAge "42.00:00:00" -MinPasswordAge "1.00:00:00" -LockoutThreshold 3 -LockoutObservationWindow "00:10:00" -LockoutDuration "00:10:00" -ReversibleEncryptionEnabled $false
+```
+
+The policy was created, but attaching it to the group failed because no object named "Sales-Team" existed:
+
+![PSO created, group not found](screenshots/entry25-06-pso-created-group-not-found.png)
+
+Rather than guess at the name, I looked it up. The group is actually named "Sales Team," with a space. I also confirmed both test users exist before relying on them, since a filter that matches nothing returns nothing silently:
+
+![Sales Team group lookup](screenshots/entry25-07-sales-team-group-lookup.png)
+
+```powershell
+Add-ADFineGrainedPasswordPolicySubject -Identity "Sales-PSO" -Subjects "Sales Team"
+Get-ADUserResultantPasswordPolicy -Identity jsmith
+Get-ADUserResultantPasswordPolicy -Identity jdoe
+```
+
+![Resultant policy for Jane Smith](screenshots/entry25-08-pso-resultant-policy-jsmith.png)
+
+Jane Smith (Sales) now receives Sales-PSO with a 10-character minimum and the lockout values carried over correctly, applied through her membership in Sales Team. John Doe (IT) returns nothing, meaning he still falls back to the domain policy.
+
+### Step 6: Proving the Policy Is Enforced
+
+Showing that a policy is applied isn't the same as showing it's enforced, so I tested it with real password resets:
+
+![PSO enforcement test](screenshots/entry25-09-pso-enforcement-test.png)
+
+A 9-character password that meets complexity rules was **rejected** for Jane Smith, a 14-character password was accepted for her, and the same 9-character password was **accepted** for John Doe. The Sales group now genuinely requires 10 characters, and no one else is affected.
+
+With the correct mechanism in place, I unlinked the Entry 17 GPO from the Sales OU. I unlinked rather than deleted it, so the history stays intact without leaving a misleading configuration behind.
+
+```powershell
+Remove-GPLink -Name "Sales-Password-Policy" -Target "OU=Sales,DC=homelab,DC=local"
+```
+
+### Step 7: Creating a Named Admin Account
+
+Entry 24 showed that relying on the built-in Administrator for daily work is risky. Standard practice is to use a personal admin account for everyday administration and keep the built-in account as a **break-glass** account for emergencies. I created an Admin Accounts OU and a new account in it, prompting for the password with `Read-Host -AsSecureString` so it never appeared in the command or its history, then added the account to Domain Admins:
+
+![GPO unlinked and admin account created](screenshots/entry25-10-gpo-unlink-admin-account-created.png)
+
+I initially created the account with a placeholder name, so I renamed it. Renaming an account is a real help desk task (for example, after an employee's name change), and it involves three separate names: the logon name (SamAccountName), the sign-in name (UserPrincipalName), and the directory object's own name. The account keeps its password, SID, and group memberships.
+
+![Admin account renamed to adm-sodeeq](screenshots/entry25-11-admin-account-renamed.png)
+
+### Step 8: Troubleshooting a Sign-In Failure
+
+My first RDP sign-in as `HOMELAB\adm-sodeeq` failed:
+
+![Credentials did not work](screenshots/entry25-12-rdp-credentials-did-not-work.png)
+
+With a lockout threshold of 3, guessing wasn't an option, so I signed in with labadmin (the break-glass account proved its value on the first day) and checked the evidence. The failed attempt had produced a 4625 event:
+
+![4625 with Sub Status 0xC000006A](screenshots/entry25-13-4625-bad-password-substatus.png)
+
+Sub Status **0xC000006A** means the account name was valid but the password was wrong. Logon Type 3 over NTLM is how an RDP sign-in first appears when Network Level Authentication is enabled: the client authenticates over the network before the desktop session starts. I also noticed the source IP had changed from the one I attributed to myself in Entry 24, because my internet provider had assigned a new address, a reminder that IP attribution has to be rechecked, not assumed.
+
+After resetting the password, sign-in still failed. I checked the account's state before trying again:
+
+![BadLogonCount check](screenshots/entry25-14-badlogoncount-check.png)
+
+The account wasn't locked and the password wasn't expired, which ruled out the "User must change password at next logon" option that Active Directory Users and Computers enables by default. BadLogonCount was 2, so the domain controller was receiving and rejecting the password, and I had one attempt left.
+
+To isolate the problem, I tested the password from inside the VM with `runas /user:HOMELAB\adm-sodeeq cmd`. A new command prompt opened, proving the password on the account was correct and the problem was on my Mac's side. Using the Windows App's "Show password" option, I found it: my Mac and the VM were using different keyboard layouts, one QWERTZ and one QWERTY, so the Y and Z keys were swapped. Every Y or Z in the password reached the server as the other letter.
+
+"My password works on one computer but not another" is one of the most common help desk tickets, and a keyboard layout mismatch is one of its classic causes. I solved it by checking lockout state first, isolating the variable with a test inside the VM, and then comparing exactly what was typed.
+
+### Step 9: Confirming Admin Rights and Seeing UAC in Action
+
+Once signed in as adm-sodeeq, with its own password separate from labadmin's, I verified the account's group membership in a normal PowerShell window:
+
+![whoami showing deny only](screenshots/entry25-15-whoami-uac-deny-only.png)
+
+Domain Admins showed as "Group used for deny only." That's User Account Control working as designed: administrators receive a filtered token for everyday programs, with admin groups usable only to deny access, never to grant it. Running PowerShell as administrator triggered a UAC consent prompt:
+
+![UAC consent prompt](screenshots/entry25-16-uac-consent-prompt.png)
+
+It asked only for consent, not a password, because the account is already an administrator. The "Verified publisher: Microsoft Windows" line is what to check before approving any elevation request. In the elevated window, the same group became fully active:
+
+![whoami elevated](screenshots/entry25-17-whoami-elevated.png)
+
+The group now reads "Mandatory group, Enabled by default, Enabled group," and its SID ends in -512, the well-known RID for Domain Admins in every domain. Same account, same group, but admin rights only when explicitly requested. That's least privilege applied even to administrators.
+
+### Lessons Learned
+
+The biggest lesson from this entry is that my own documentation needed auditing too. A password policy I had recorded as working in Entry 17 never applied to a single user, and Group Policy Modeling didn't reveal that because the GPO technically applied; its password settings just don't affect domain accounts from an OU. Verifying effective results, with `Get-ADUserResultantPasswordPolicy` and actual password tests, is what caught it.
+
+I also saw again how often the first explanation is wrong. The labadmin mystery went through two plausible theories before event 4739 gave the answer, and the sign-in failure looked like a typo until testing proved the password was correct and pointed to the keyboard layout.
+
+Finally, the break-glass account justified itself immediately. I needed labadmin to recover access on the very first day of using the new admin account, which is exactly the scenario it exists for.
+
+### Next Steps
+
+In Entry 26, I plan to practice the full help desk user lifecycle with PowerShell: bulk-creating users from a CSV file, resetting passwords and forcing a change at next logon, unlocking accounts, and offboarding a departing employee by disabling the account, removing group memberships, and moving it to a Disabled Users OU.
