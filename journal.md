@@ -1217,3 +1217,149 @@ Finally, the break-glass account justified itself immediately. I needed labadmin
 ### Next Steps
 
 In Entry 26, I plan to practice the full help desk user lifecycle with PowerShell: bulk-creating users from a CSV file, resetting passwords and forcing a change at next logon, unlocking accounts, and offboarding a departing employee by disabling the account, removing group memberships, and moving it to a Disabled Users OU.
+
+
+
+
+
+
+
+
+
+
+## Entry 26: The Help Desk User Lifecycle in PowerShell: Onboarding, Resets, Unlocks and Offboarding
+
+### Overview
+
+Most help desk work in a Windows environment revolves around user accounts: new starters need accounts on day one, people forget passwords, accounts get locked, and departing employees need their access removed cleanly. In this entry, I worked through that entire lifecycle in my Active Directory lab using PowerShell, signed in with my named admin account (adm-sodeeq) from Entry 25.
+
+The lab work went smoothly in the end, but not on the first try. My first onboarding script reported success while every account failed, and moving the script into the server exposed a text-handling trap. Both problems taught me more than a clean run would have.
+
+### Step 1: Looking Up the Structure First
+
+Following the lesson from Entry 25 ("look it up, don't guess"), I listed the domain's OUs before creating anything, and created a Disabled Users OU for offboarding.
+
+```powershell
+Get-ADOrganizationalUnit -Filter * | Select-Object Name, DistinguishedName | Sort-Object Name
+New-ADOrganizationalUnit -Name "Disabled Users" -Path "DC=homelab,DC=local"
+```
+
+![OU structure](screenshots/entry26-01-ou-structure.png)
+
+The domain has HR, IT and Sales OUs for employees, plus Admin Accounts for my admin account.
+
+### Step 2: Preparing the New-Hire List
+
+In a real company, HR sends the help desk a list of new starters. I recreated that with a CSV file, making sure the Department column matched the OU names exactly so a script could place each person automatically. I also checked the department groups and found a consistent naming pattern: IT Team, Sales Team and HR Team.
+
+```csv
+FirstName,LastName,Department,Title
+Amara,Okafor,Sales,Account Executive
+Marc,Gagnon,Sales,Sales Representative
+Liam,Roberts,IT,Help Desk Technician
+Nadia,Patel,HR,HR Coordinator
+```
+
+![CSV and department groups](screenshots/entry26-02-newhires-csv-and-groups.png)
+
+That pattern meant each person's group could be derived from their department ("Department + Team") without a lookup table.
+
+### Step 3: The Script That Lied
+
+My first onboarding script looped through the CSV and created each account. It failed, but that wasn't the real problem:
+
+![First run reporting false success](screenshots/entry26-03-first-run-false-success.png)
+
+Every `New-ADUser` call failed on password complexity, yet the script still printed "Created aokafor in Sales, added to Sales Team" for every user, because `Write-Host` ran regardless of what happened before it. In real help desk work, a script that reports success when it failed is dangerous: someone would tell HR the accounts were ready.
+
+The password failure itself had a subtle cause. The script began with a `Read-Host` prompt for the temporary password, and when I pasted the whole script at once, PowerShell fed the rest of the pasted text into that hidden prompt. The "password" it stored was a fragment of my own code.
+
+I fixed the reporting problem by wrapping each account's steps in `try`/`catch` with `-ErrorAction Stop`. If any step fails, the script jumps to `catch`, prints the real error in red, and never prints the success message. Before re-running, I confirmed the failed attempt hadn't left any half-created accounts behind.
+
+### Step 4: Saving the Script as a File, and a Backslash Trap
+
+Long multi-line pastes weren't working reliably over my RDP session, so I moved the script into a .ps1 file instead, which is better practice anyway because it's reusable. I pasted it into Azure Run Command in my browser, which wrote it to the server without going through the RDP clipboard.
+
+Printing the saved file back showed a problem:
+
+![Run Command splitting the path](screenshots/entry26-04-runcommand-newline-bug.png)
+
+The path `C:\Scripts\newhires.csv` had been split in two. On its way through Run Command, the `\n` in `\newhires` was treated as a newline character, so the saved script would have failed to find its CSV. PowerShell accepts forward slashes in Windows paths, so I switched to `C:/Scripts/newhires.csv` and saved it again:
+
+![Script saved correctly](screenshots/entry26-05-runcommand-script-saved.png)
+
+Two habits came out of this: text passed through one tool can be reinterpreted by another, and printing a saved file back is a cheap check that catches it.
+
+### Step 5: Bulk Onboarding
+
+With the script saved as `C:\Scripts\New-Hires.ps1` (included in this repo), onboarding became a single command:
+
+```powershell
+& "C:\Scripts\New-Hires.ps1"
+```
+
+![Four new hires created](screenshots/entry26-06-new-hires-created.png)
+
+The script builds each username as first initial + last name, skips anyone who already exists, places each person in their department's OU, sets their title and department, adds them to their team group, and forces a password change at first sign-in. It uses splatting (a `@params` hashtable) to pass all the settings to `New-ADUser` cleanly. The same screenshot shows the difference error handling makes: the old version's misleading white messages between red errors above, and the fixed version's clean green results below.
+
+### Step 6: Verifying Onboarding
+
+I didn't rely on the script's own report. I checked each account directly:
+
+![Onboarding verification](screenshots/entry26-07-onboarding-verification.png)
+
+Every user is in the right department with the right title and team group, and every one shows `MustChangePw = True` (a `pwdLastSet` value of 0). The two Sales hires also resolved to Sales-PSO with a 10-character minimum, purely through their Sales Team membership. No one configured their password policy individually; the group did it. That's why group-based policies scale.
+
+### Step 7: Resetting a Forgotten Password
+
+The most common help desk ticket: "Liam forgot his password." I reset it and forced a change at next logon, so the technician never knows the user's real password.
+
+```powershell
+$newPw = Read-Host "New temporary password for lroberts" -AsSecureString
+Set-ADAccountPassword lroberts -Reset -NewPassword $newPw; Set-ADUser lroberts -ChangePasswordAtLogon $true
+```
+
+![Password reset and failed logons](screenshots/entry26-08-password-reset-and-failed-logons.png)
+
+The PasswordLastSet column is blank, which is expected: with "must change at next logon" set, the last-set value is stored as 0, which effectively means "never." A real date appears once Liam chooses his own password.
+
+### Step 8: Investigating and Unlocking a Locked Account
+
+To simulate the second most common ticket, I entered a wrong password for Nadia Patel three times with `runas`, the domain's lockout threshold. Each attempt failed with error 1326, the same bad-password failure I decoded in Entry 25.
+
+![Nadia Patel locked out](screenshots/entry26-09-npatel-locked-out.png)
+
+Before unlocking, a help desk technician should check two things. The first is the caller's identity, for example with a callback to a known number, because "I'm locked out, please unlock me" is a common social engineering opener. The second is where the failures came from. The 4740 lockout event records that:
+
+![4740, unlock and 4767](screenshots/entry26-10-4740-unlock-4767.png)
+
+The Caller Computer Name was ad-dc-01, a known machine, so it was safe to unlock. This field was blank in Entry 24; it was populated here because `runas` signs in locally on the domain controller.
+
+The 4767 unlock event is the key comparison with Entry 24. When I unlocked labadmin through Azure Run Command then, the Subject was the DC's own computer account, SYSTEM. This time, the Subject is adm-sodeeq. With a named admin account, the audit trail records exactly who unlocked whom, which is the practical payoff of the account I created in Entry 25.
+
+### Step 9: Offboarding a Departing Employee
+
+The last stage of the lifecycle: Marc Gagnon is leaving. The rule is to disable, not delete. Deleting an account destroys its SID and history, which are needed if files must be reassigned, if there's an investigation, or if the person is rehired.
+
+```powershell
+Get-ADPrincipalGroupMembership mgagnon | Select-Object Name
+Disable-ADAccount mgagnon; Set-ADUser mgagnon -Description "Offboarded 2026-09-30 by adm-sodeeq - former Sales Representative"
+Get-ADPrincipalGroupMembership mgagnon | Where-Object { $_.Name -ne "Domain Users" } | ForEach-Object { Remove-ADGroupMember -Identity $_ -Members mgagnon -Confirm:$false }
+Get-ADUser mgagnon | Move-ADObject -TargetPath "OU=Disabled Users,DC=homelab,DC=local"
+```
+
+![Offboarding Marc Gagnon](screenshots/entry26-11-offboarding-mgagnon.png)
+
+I recorded his groups (Domain Users and Sales Team) before removing anything, for the audit trail. After offboarding, the account is disabled, sits in the Disabled Users OU, carries a description of when, by whom and why, and has no group memberships apart from Domain Users, the primary group Windows requires every account to keep. Leaving Sales Team also removed Sales-PSO from him, so group-based access and policies cleaned themselves up.
+
+### Lessons Learned
+
+The biggest lesson was that a script's own success message isn't evidence. My first version told me four accounts existed when none did. Error handling fixed the script, but the habit that matters is verifying the result independently, which is how every stage of this entry ended.
+
+I also saw how much of help desk work is process around the command itself. The reset and unlock each take one line of PowerShell; the important parts are forcing a password change, verifying the caller, checking where the failures came from, and making sure the audit trail shows who did what.
+
+Finally, moving between tools had its own traps. A pasted block swallowed by a hidden prompt, and a backslash turned into a line break, were both invisible until I printed back what actually arrived.
+
+### Next Steps
+
+I'd like to extend the onboarding script to generate a unique random temporary password per user and write the results to a CSV for handoff, rather than using one shared temporary password, and to turn the offboarding steps into a second reusable script.
