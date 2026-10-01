@@ -1454,7 +1454,7 @@ The Security log shows all three offboarding actions within the same second: eve
 
 ![4724 targets and actor](screenshots/entry27-06-audit-trail-4724-targets.png)
 
-The two onboarding events are the initial passwords for gbennett and ohaddad, set when their accounts were created, and the third is Omar's offboarding scramble. Every event is attributed to adm-sodeeq. I had initially miscounted the onboarding events as three; pulling the details corrected that, which is exactly why it's worth checking rather than reading a summary. The result is Omar's complete account lifecycle, from creation to offboarding, recorded under a named admin account.
+The two onboarding events are the initial passwords for gbennett and ohaddad, set when their accounts were created, and the third is Omar's offboarding scramble. Every event is attributed to adm-sodeeq. An early read of the log suggested three onboarding events; pulling the details showed there were only two, which is exactly why it's worth checking rather than reading a summary.
 
 ### Lessons Learned
 
