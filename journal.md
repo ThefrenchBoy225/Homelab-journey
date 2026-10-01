@@ -1363,3 +1363,107 @@ Finally, moving between tools had its own traps. A pasted block swallowed by a h
 ### Next Steps
 
 I'd like to extend the onboarding script to generate a unique random temporary password per user and write the results to a CSV for handoff, rather than using one shared temporary password, and to turn the offboarding steps into a second reusable script.
+
+
+
+
+
+
+
+
+
+
+
+## Entry 27: Turning Help Desk Tasks into Reusable Scripts
+
+### Overview
+
+Entry 26 covered the full user lifecycle by hand. This entry turns both ends of it into proper tools: an upgraded onboarding script that gives every new hire their own random temporary password, and an offboarding script that takes a username and ticket number and handles the whole departure in one command. Both scripts are in the [scripts](scripts/) folder of this repo. I also cleaned up a leftover from the SIEM work.
+
+### Step 1: Housekeeping, Disabling the Splunk Forwarder
+
+My Splunk Cloud trial ended after Entry 24, but the Universal Forwarder on ad-dc-01 was still running and trying to send logs to an instance that no longer exists.
+
+```powershell
+Stop-Service SplunkForwarder; Set-Service SplunkForwarder -StartupType Disabled
+```
+
+![Splunk forwarder stopped and disabled](screenshots/entry27-01-splunk-forwarder-disabled.png)
+
+I disabled the service rather than uninstalling it, so it can be switched back on with one command if I start a new SIEM trial later. Leaving software running that points at a dead endpoint is the kind of small loose end that adds noise and attack surface over time.
+
+### Step 2: Onboarding v2, Unique Passwords and a Handoff File
+
+The Entry 26 script gave every new hire the same temporary password. That's convenient but risky: if one person's first-day details leak, every new account from that batch is exposed. Version 2 fixes that and adds a few improvements.
+
+Each hire now gets their own random 12-character temporary password with four uppercase letters, four lowercase letters and four digits, shuffled. The generator deliberately leaves out characters that are easy to misread (0/O and 1/l/I) and the letters Y and Z, after the keyboard layout problem in Entry 25. Every password meets the Sales team's 10-character Fine-Grained Password Policy, and every account still has to change its password at first sign-in.
+
+The script also takes a `-CsvPath` parameter, so it can run against any batch of hires without being edited, and it writes the usernames and temporary passwords to a timestamped handoff file for whoever delivers the first-day details.
+
+I saved the script to the server through Azure Run Command, as in Entry 26, using forward slashes in every path to avoid the `\n` problem I hit last time. Printing the first lines back confirmed it saved correctly:
+
+![New-Hires v2 saved through Run Command](screenshots/entry27-02-new-hires-v2-saved.png)
+
+### Step 3: Running a New Batch
+
+The second batch included two new hires and one person who already had an account, to test that existing accounts are skipped safely:
+
+```powershell
+& "C:\Scripts\New-Hires.ps1" -CsvPath "C:\Scripts\newhires-batch2.csv"
+```
+
+![New-Hires v2 run](screenshots/entry27-03-new-hires-v2-run.png)
+
+Grace Bennett (HR) and Omar Haddad (IT) were created and added to their team groups. Amara Okafor was skipped with a warning instead of causing an error or a duplicate account. The handoff file's name includes the date and time, so batches never overwrite each other.
+
+### Step 4: Handling the Handoff File
+
+The handoff file is a deliberate trade-off. It holds plaintext temporary passwords, which is exactly what makes it useful, so it has to be treated carefully: delivered through a secure channel, then deleted. The forced password change at first sign-in also limits how long those passwords are any use.
+
+I checked that the two passwords were different, then deleted the file and confirmed it was gone:
+
+![Handoff file and offboarding tests](screenshots/entry27-04-handoff-and-offboard-tests.png)
+
+`Test-Path` returned False, so the file no longer exists. The temporary passwords are blacked out in the screenshot. They were short-lived lab passwords, but publishing credentials is a habit worth never starting.
+
+One honest limitation: the passwords come from PowerShell's `Get-Random`, which is fine for short-lived temporary passwords in a lab, but production tools often use a cryptographic random number generator instead.
+
+### Step 5: An Offboarding Script
+
+The offboarding steps from Entry 26 became `Offboard-User.ps1`, which requires a username and a ticket number:
+
+```powershell
+& "C:\Scripts\Offboard-User.ps1" -Username ohaddad -Ticket HD-1042
+```
+
+In order, it saves the user's group memberships to `C:\Scripts\offboarding\<user>-<date>-groups.csv` before touching anything, scrambles the password with a random 24-character value so any password the person still knows stops working, disables the account, writes the date, the admin's name, the ticket number and the person's former title into the description, removes their group memberships, and moves the account to the Disabled Users OU. The whole sequence is wrapped in error handling, so a failure reports which user and why instead of leaving an account half-offboarded.
+
+I tested the failure path first, with a username that doesn't exist. The script reported "User jbloggs not found - nothing changed" and stopped. Then I offboarded Omar Haddad under ticket HD-1042, and the script confirmed one group removed and the record saved (both runs are in the screenshot above).
+
+Testing how a script fails before trusting it with a real account is the same habit that caught the misleading success messages in Entry 26.
+
+### Step 6: Verifying the Result and the Audit Trail
+
+I verified the account itself, the saved group record, and the Security log:
+
+![Offboarding verification](screenshots/entry27-05-offboarding-verification.png)
+
+Omar's account is disabled, sits in OU=Disabled Users, and has no group memberships apart from Domain Users. The description, filled in automatically, reads "Offboarded 2026-10-01 by adm-sodeeq - ticket HD-1042 - former Desktop Support Technician." The group record shows IT Team tied to the ticket, so if anyone later asks what access he had, the answer is on file.
+
+The Security log shows all three offboarding actions within the same second: event 4724 (the password scramble), 4725 (account disabled) and 4729 (removed from a security-enabled global group, which tells me IT Team is a global group). There were also two earlier 4724 events from onboarding. To account for every event rather than assume, I pulled the target and the actor for each password event:
+
+![4724 targets and actor](screenshots/entry27-06-audit-trail-4724-targets.png)
+
+The two onboarding events are the initial passwords for gbennett and ohaddad, set when their accounts were created, and the third is Omar's offboarding scramble. Every event is attributed to adm-sodeeq. I had initially miscounted the onboarding events as three; pulling the details corrected that, which is exactly why it's worth checking rather than reading a summary. The result is Omar's complete account lifecycle, from creation to offboarding, recorded under a named admin account.
+
+### Lessons Learned
+
+Scripts make help desk work faster, but the bigger gain is consistency: every new hire gets the same correct setup, and every departure follows the same documented steps with a record left behind. Writing the steps into a script also forced me to decide the right order, such as recording groups before removing them.
+
+Security trade-offs show up even in simple automation. Unique passwords are safer than a shared one, but they create a file of plaintext passwords that needs its own handling. Naming that trade-off and building the deletion step into the process matters as much as the code.
+
+Finally, testing the failure path deserves as much attention as the success path. A script that refuses to act on bad input, and says so clearly, is one I can trust with real accounts.
+
+### Next Steps
+
+Possible next steps include adding a `-WhatIf` mode to the offboarding script so it can preview changes before making them, and building a small monthly audit report of disabled accounts and recent account changes.
