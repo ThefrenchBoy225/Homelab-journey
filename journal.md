@@ -1467,3 +1467,123 @@ Finally, testing the failure path deserves as much attention as the success path
 ### Next Steps
 
 Possible next steps include adding a `-WhatIf` mode to the offboarding script so it can preview changes before making them, and building a small monthly audit report of disabled accounts and recent account changes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 28: A Safety Preview, a Monthly Account Audit, and the Account That Only Looked Active
+
+### Overview
+
+Entry 27 ended with two ideas: a preview mode for the offboarding script, so it can show what it would change before changing anything, and a monthly report of account activity. This entry builds both. The audit report then did exactly what an audit is for: it flagged an account I had forgotten about, and investigating one inconsistent detail led to a genuinely useful lesson about what Windows' "last logon" timestamp really means. Both scripts are in the [scripts](scripts/) folder of this repo.
+
+### Step 1: Adding a -WhatIf Preview Mode
+
+Offboarding is destructive. It scrambles a password, disables an account and removes access, so being able to preview it first is a real safety feature. Professional PowerShell tools support this through the `-WhatIf` parameter, and adding it took one line at the top of the script:
+
+```powershell
+[CmdletBinding(SupportsShouldProcess)]
+```
+
+That gives the script built-in `-WhatIf` and `-Confirm` parameters, and PowerShell automatically passes preview mode on to every Active Directory command inside it. There was one trap to avoid, and it's the same one from Entry 26: in preview mode, the script's green "Offboarded..." success message would still print even though nothing happened. So the script now checks `$WhatIfPreference` and, in preview mode, prints an honest PREVIEW summary instead, including which groups would be removed.
+
+I saved the updated script through Azure Run Command, as in earlier entries:
+
+![Updated offboarding script saved](screenshots/entry28-02-offboard-whatif-saved.png)
+
+Then I previewed offboarding Grace Bennett, an active HR employee, and checked her account afterwards:
+
+![WhatIf preview and verification](screenshots/entry28-01-offboard-whatif-preview.png)
+
+The preview listed all seven actions in order: creating the offboarding folder, exporting her group record, resetting her password, three "Set" operations (disabling the account, writing the description, and removing her from HR Team, which Active Directory records as a change to the group), and moving the account. The check underneath proves nothing actually happened: Grace is still enabled, still in the HR OU, and still in HR Team.
+
+### Step 2: Building the Account Audit Report
+
+`Get-AccountAudit.ps1` looks back over a chosen number of days (30 by default) and builds an HTML report. It reads the Security log for account changes (accounts created, enabled, disabled or deleted; password resets; lockouts and unlocks; group membership changes) and shows who each change affected and who made it. It also lists disabled accounts with their descriptions, accounts currently locked out, new accounts still waiting for their first sign-in, and enabled accounts with no sign-in during the period.
+
+One design choice mattered: different event types store their details in different positions, so the script reads each event's fields by name from its XML rather than by position. That way the right values come out for every event type.
+
+![Audit script saved](screenshots/entry28-03-audit-script-saved.png)
+
+![Audit summary](screenshots/entry28-04-audit-summary.png)
+
+The first run found 47 account changes in 30 days, 4 disabled accounts, nobody locked out, 5 accounts waiting for first sign-in, and 4 enabled accounts with no sign-in.
+
+### Step 3: Reading the Report
+
+![Account changes table](screenshots/entry28-05-audit-report-account-changes.png)
+
+Laid out as one timeline, the log showed things the individual commands never had. Each scripted onboarding produced the same four events in the same second: 4720 (account created), 4724 (password set), 4722 (account enabled) and 4728 (added to group). That shows how `New-ADUser` works internally: it creates the account disabled, sets the password, and only then enables it.
+
+The report also compared my two offboardings. Marc Gagnon's manual offboarding in Entry 26 shows the account disabled and removed from Sales Team, but no password reset, because the manual steps never scrambled his password. Omar Haddad's scripted offboarding in Entry 27 shows all three. The audit report effectively proved that the script is more thorough than the manual process it replaced.
+
+Every human action in the table is attributed to my named admin account, adm-sodeeq. The one exception is Nadia Patel's lockout, attributed to `ad-dc-01$`, because the domain controller locks accounts itself when the threshold is reached.
+
+![Report sections](screenshots/entry28-06-audit-report-sections.png)
+
+The disabled accounts section showed Marc and Omar with their offboarding descriptions, plus krbtgt and Guest. Both are disabled by design: Guest by default, and krbtgt because it's never used to sign in. Its password is the secret key the domain controller uses to sign every Kerberos ticket, which makes it one of the most sensitive accounts in Active Directory.
+
+### Step 4: The Finding, an Account That Never Started
+
+The "waiting for first sign-in" list contained one name I didn't expect: Sam Wilson (swilson), created on September 9 during my early Active Directory entries. Its temporary password had never been changed in over a month. In a real company, that's exactly what this check exists to catch: a new hire who never started, a duplicate, or a forgotten test account, any of which leaves an enabled account sitting with a known starting password.
+
+But one detail didn't fit. Sam Wilson was not in the "no sign-in in 30 days" list, even though the other new hires who had never signed in were. I checked the account directly:
+
+![swilson account details](screenshots/entry28-07-swilson-account-details.png)
+
+Active Directory recorded a LastLogonDate of September 15 at 6:35:48 PM, 29 days earlier, just inside the report's 30-day window. That explained the missing list entry, but raised a better question: how could an account sign in when its password still had to be changed?
+
+### Step 5: Investigating the Logon
+
+I searched the Security log for that exact moment:
+
+![Events at 6:35:48 PM](screenshots/entry28-08-swilson-logon-events.png)
+
+Four events happened within the same second: 4648 (a logon using explicit credentials), 4624 (successful logon), 4627 (group membership recorded) and 4634 (logoff). Something had signed in as swilson and immediately finished.
+
+My first theory was that the "must change password" setting had been turned on after that logon. Turning that setting on logs a 4738 ("A user account was changed") rather than a password reset, so I checked swilson's change history:
+
+![4648 details and 4738 history](screenshots/entry28-09-4648-and-4738-history.png)
+
+That theory was wrong. The 4738 history showed changes only at the account's creation on September 9, so the setting had been on the whole time. The 4648 details pointed somewhere else entirely. The Subject wasn't a person but the domain controller itself (`ad-dc-01$`, SYSTEM), the process was `lsass.exe`, the Windows security subsystem, and the target was localhost with no network address. Nobody had typed swilson's password.
+
+The 4624 confirmed it:
+
+![4624 with Logon Process Authz](screenshots/entry28-10-4624-authz-logon.png)
+
+Logon Type 3, Logon Process **Authz**, authentication package Kerberos, process lsass.exe. Authz is the Windows authorization subsystem. To calculate a user's effective permissions, Windows builds a logon token for that user without needing their password, so it can see exactly which groups they belong to. September 15 was the day of Entry 22, and about 25 minutes before setting the lockout policy, I had finished Entries 20 and 21, where I used Effective Access on the company share folder to check the permissions of one user from each department. The HR user was Sam Wilson.
+
+So my own permission check from weeks earlier had updated swilson's LastLogonDate, making an account that no human had ever used look active.
+
+### Step 6: Acting on the Finding
+
+An audit is only useful if findings lead to decisions. Sam Wilson was an enabled HR Team member whose owner never signed in, so the right action, after confirming the account wasn't needed, was to disable it. This was the perfect real use of the new preview mode:
+
+![swilson preview and offboarding](screenshots/entry28-11-swilson-preview-and-offboard.png)
+
+The preview showed the same seven actions, removing HR Team, and the real run offboarded swilson under ticket HD-1051. Re-running the audit report confirmed the result:
+
+![Audit re-run](screenshots/entry28-12-audit-rerun-summary.png)
+
+Account changes went from 47 to 50 (the password scramble, the disable and the group removal), disabled accounts from 4 to 5, and accounts waiting for first sign-in from 5 to 4. Swilson moved from one list to the other.
+
+### Lessons Learned
+
+The most useful lesson was that LastLogonDate doesn't prove a person signed in. Windows updates it for its own background authentications, including permission checks like Effective Access. Anyone deciding whether an account is in use based on that timestamp alone would have concluded swilson was active. The "temporary password never changed" check was the more trustworthy signal, and the two facts together told the full story.
+
+I also saw the value of chasing one inconsistent detail instead of moving past it. The report itself was correct; the interesting part was the account that didn't fit both lists. Following it through four events, one disproven theory and the Authz logon process explained exactly what happened.
+
+Finally, this entry completed a full audit cycle: the report flagged an account, I investigated it, decided on an action, previewed it, applied it, and confirmed the result with a fresh report. That cycle, more than any single script, is what keeps a directory clean over time.
+
+### Next Steps
+
+The Wazuh trial becomes available again on November 15, which would bring live SIEM monitoring back into the lab. Before then, I could schedule the audit report to run automatically each month with Task Scheduler.
