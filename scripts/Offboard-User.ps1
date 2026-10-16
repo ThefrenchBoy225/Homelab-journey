@@ -1,11 +1,13 @@
-# Offboard-User.ps1
+# Offboard-User.ps1 (v2 - with -WhatIf preview mode)
 # Offboards a departing user: saves a record of their groups, scrambles the password,
 # disables the account, documents the change, removes group memberships, and moves
 # the account to the Disabled Users OU. Disables rather than deletes, so the SID and
 # history are preserved.
-# Usage: .\Offboard-User.ps1 -Username ohaddad -Ticket HD-1042
-# Homelab Entry 27 - homelab.local
+# Preview first:  .\Offboard-User.ps1 -Username swilson -Ticket HD-1051 -WhatIf
+# Then apply:     .\Offboard-User.ps1 -Username swilson -Ticket HD-1051
+# Homelab Entry 28 - homelab.local
 
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)][string]$Username,
     [Parameter(Mandatory)][string]$Ticket
@@ -17,13 +19,17 @@ if (-not $user) {
     return
 }
 
+# -WhatIf sets $WhatIfPreference, which every AD cmdlet below honours automatically
+$preview = [bool]$WhatIfPreference
+if ($preview) { Write-Host "PREVIEW MODE - no changes will be made" -ForegroundColor Cyan }
+
 $date   = Get-Date -Format yyyy-MM-dd
 $logDir = "C:/Scripts/offboarding"
-New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
 try {
     # 1. Record group memberships before removing anything
     $groups = Get-ADPrincipalGroupMembership $Username -ErrorAction Stop | Where-Object { $_.Name -ne "Domain Users" }
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     $groups | Select-Object @{n="User";e={$Username}}, Name, @{n="Ticket";e={$Ticket}}, @{n="Date";e={$date}} |
         Export-Csv "$logDir/$Username-$date-groups.csv" -NoTypeInformation
 
@@ -42,8 +48,14 @@ try {
     # 5. Move to the Disabled Users OU
     Move-ADObject -Identity $user.DistinguishedName -TargetPath "OU=Disabled Users,DC=homelab,DC=local" -ErrorAction Stop
 
-    Write-Host "Offboarded $Username (ticket $Ticket): password scrambled, disabled, $(@($groups).Count) group(s) removed, moved to Disabled Users" -ForegroundColor Green
-    Write-Host "Group record saved to $logDir/$Username-$date-groups.csv" -ForegroundColor Yellow
+    # Honest reporting in both modes
+    if ($preview) {
+        Write-Host "PREVIEW for $Username (ticket $Ticket): would remove $(@($groups).Count) group(s): $(@($groups.Name) -join ', '). Run again without -WhatIf to apply." -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "Offboarded $Username (ticket $Ticket): password scrambled, disabled, $(@($groups).Count) group(s) removed, moved to Disabled Users" -ForegroundColor Green
+        Write-Host "Group record saved to $logDir/$Username-$date-groups.csv" -ForegroundColor Yellow
+    }
 }
 catch {
     Write-Host "FAILED offboarding $Username : $($_.Exception.Message)" -ForegroundColor Red
