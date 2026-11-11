@@ -1587,3 +1587,167 @@ Finally, this entry completed a full audit cycle: the report flagged an account,
 ### Next Steps
 
 The Wazuh trial becomes available again on November 15, which would bring live SIEM monitoring back into the lab. Before then, I could schedule the audit report to run automatically each month with Task Scheduler.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 29: Automating the Audit with a Least-Privilege Service Account (After Getting Locked Out of My Own Lab)
+
+### Overview
+
+Entry 28 ended with a working account audit report that I had to run by hand. The goal of this entry was to run it automatically every month, the way a real IT team would. The interesting part wasn't the schedule; it was which account the task runs as. Running it as my admin account or as SYSTEM would give a simple report far more power than it needs, and storing an admin password in a scheduled task is a classic weakness. Instead, I used a **group Managed Service Account (gMSA)**: an account whose password Windows generates and rotates automatically, that only named servers can use, and that I gave exactly the permissions the job needs.
+
+Before any of that, though, the lab locked me out, and the recovery turned into the first lesson of the entry.
+
+### Step 1: Locked Out by My Own Password Policy
+
+When I tried to connect over RDP, the connection was refused:
+
+![RDP error 0xf07, password expired](screenshots/entry29-01-rdp-password-expired-0xf07.png)
+
+Error 0xf07 means the password has expired. My domain policy sets a maximum password age of 42 days, and I had given adm-sodeeq its own password at the end of September, so it expired around November 10. Normally Windows prompts for a new password at sign-in, but RDP with Network Level Authentication checks credentials before the desktop starts, so it can't show that screen. It just refuses to connect. This is one of the most common help desk tickets there is.
+
+I didn't try my break-glass account, labadmin, because its password had almost certainly been set when the VM was created in early September. Instead I used the same out-of-band channel as Entry 24, Azure Run Command, which runs scripts on the VM without any Windows sign-in:
+
+```powershell
+Set-ADUser adm-sodeeq -Replace @{pwdLastSet=0}
+Set-ADUser adm-sodeeq -Replace @{pwdLastSet=-1}
+```
+
+![Run Command restoring access](screenshots/entry29-02-runcommand-restore-access.png)
+
+Setting the "password last set" value to 0 and then to -1 makes Active Directory treat the existing password as if it were set right now, restarting the 42-day clock without putting a new password in plain text in the Run Command script. adm-sodeeq showed PasswordExpired: False. The output also confirmed my suspicion: **labadmin's password was set on September 5 and had expired**. My emergency account had been quietly unusable for almost a month.
+
+### Step 2: The Minimum Password Age Gets in the Way
+
+That trick bypasses the intent of the expiry policy, so I immediately tried to change the password properly. Windows refused:
+
+![Password change blocked](screenshots/entry29-03-password-change-blocked-min-age.png)
+
+The message blames "length, complexity, or history," but the real cause was timing. The domain has a **minimum password age of one day**, which stops users from cycling through 24 password changes in a row to get back to an old favorite. The Run Command trick had set my password's age to "just now," so a self-service change was blocked. The minimum age only applies to a user changing their own password, not to an admin resetting it, so as a Domain Admin I reset my own password with `Set-ADAccountPassword adm-sodeeq -Reset`.
+
+Then I fixed the break-glass account the way organizations usually do: a long, strong password stored securely, exempt from expiry.
+
+```powershell
+Set-ADAccountPassword labadmin -Reset
+Set-ADUser labadmin -PasswordNeverExpires $true
+```
+
+![Admin reset and break-glass fix](screenshots/entry29-04-admin-reset-and-breakglass-fix.png)
+
+Exempting an account from expiry is a deliberate trade-off. It's justified for a break-glass account because it must work exactly when everything else has failed, and the compensating controls are the long password and the fact that nobody uses it day to day.
+
+### Step 3: Creating the gMSA
+
+gMSAs depend on a **KDS root key**, which the domain uses to generate their passwords. My domain didn't have one yet, so I created it, then created the gMSA and allowed only ad-dc-01 to retrieve its password:
+
+```powershell
+Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))
+New-ADServiceAccount -Name svc-audit -DNSHostName svc-audit.homelab.local -PrincipalsAllowedToRetrieveManagedPassword "ad-dc-01$"
+Install-ADServiceAccount svc-audit; Test-ADServiceAccount svc-audit
+```
+
+![KDS root key and gMSA](screenshots/entry29-05-kds-root-key-and-gmsa.png)
+
+A new KDS root key normally becomes usable only after 10 hours, giving it time to replicate to every domain controller. With a single domain controller there's nothing to replicate to, so backdating it is Microsoft's documented lab shortcut; in production I would wait instead. `Test-ADServiceAccount` returned True. At no point did I choose or type a password for svc-audit: Windows generated a long random one and will rotate it every 30 days.
+
+### Step 4: Granting Only What the Job Needs
+
+The audit report needs to do three things: read the Security log, write its HTML file to one folder, and sign in as a background job. Reading Active Directory needs no extra permission. For the Security log, I added svc-audit to the built-in **Event Log Readers** group, which exists for exactly this purpose. It's the only group svc-audit belongs to.
+
+Granting write access to the reports folder hit a classic PowerShell trap:
+
+![Event Log Readers and the quoting error](screenshots/entry29-06-event-log-readers-and-quote-error.png)
+
+Inside double quotes, PowerShell treats `$` as the start of a variable, so `"HOMELAB\svc-audit$:(OI)(CI)M"` failed before icacls ever ran. Since gMSA and computer account names always end in `$`, the fix is single quotes, which pass the text through exactly as written:
+
+```powershell
+icacls "C:\Scripts\reports" /grant 'HOMELAB\svc-audit$:(OI)(CI)M'
+```
+
+### Step 5: A Finding, Scripts Any User Could Edit
+
+The icacls output listing the folder's permissions showed something more important than the permission I had just added:
+
+![Inherited Authenticated Users Modify](screenshots/entry29-07-inherited-authenticated-users-modify.png)
+
+`NT AUTHORITY\Authenticated Users:(I)(M)` means every signed-in user in the domain had **Modify** access, inherited from the default permissions on the root of `C:\`. Every folder created directly under `C:\` inherits it, and `C:\Scripts` was no exception. That meant any user could edit my scripts, including `Offboard-User.ps1`, which runs with Domain Admin rights, and the audit script about to run automatically. Editing a script that runs with higher privileges is a classic privilege-escalation path: whatever commands an attacker adds run with the script's privileges the next time it runs. The real risk on this server is reduced, because ordinary users can't sign in to a domain controller by default, but scripts that run with elevated rights should never be editable by ordinary users.
+
+I removed inheritance on `C:\Scripts` and set exactly the permissions needed:
+
+```powershell
+icacls "C:\Scripts" /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' 'NT AUTHORITY\SYSTEM:(OI)(CI)F' 'HOMELAB\svc-audit$:(OI)(CI)RX'
+```
+
+![C:\Scripts locked down](screenshots/entry29-08-scripts-folder-locked-down.png)
+
+`C:\Scripts` now allows only Administrators and SYSTEM full control, and svc-audit read-and-execute, so it can run the scripts but not change them. The reports folder keeps svc-audit's Modify permission, the only place it can write. The lockdown also covers the offboarding and handoff folders, which hold group records and, briefly, temporary passwords.
+
+### Step 6: "Log On as a Batch Job," Configured Versus Applied
+
+To run as a scheduled task, an account needs the **Log on as a batch job** right. On a domain controller, that comes from the Default Domain Controllers Policy, so I added svc-audit there, keeping the existing groups:
+
+![Batch logon right in Group Policy](screenshots/entry29-09-batch-logon-right-gpo.png)
+
+The editor showed svc-audit in the list, but I checked what was actually applied on the server rather than trusting the editor:
+
+```powershell
+secedit /export /areas USER_RIGHTS /cfg "$env:TEMP\rights.inf" | Out-Null; (Select-String "SeBatchLogonRight" "$env:TEMP\rights.inf").Line
+```
+
+![Batch right not yet applied](screenshots/entry29-10-batch-right-not-yet-applied.png)
+
+The applied right listed only the three built-in groups; svc-audit's SID was missing. The policy itself contained the setting, so the cause was timing: my first `gpupdate` ran before the change was saved. A second `gpupdate /force` applied it:
+
+![Batch right applied](screenshots/entry29-11-batch-right-applied.png)
+
+If I had trusted the editor, the task would have failed on its first run with a logon error. A Group Policy setting can be configured correctly but not yet applied, and checking the applied state is what tells the difference.
+
+### Step 7: Scheduling and Testing the Task
+
+PowerShell's own scheduling commands can't create a monthly trigger, so I created the task with the classic `schtasks` tool (1st of each month at 7:00 AM) and then switched it to run as the gMSA:
+
+```powershell
+schtasks /create /tn "Monthly Account Audit" /sc MONTHLY /d 1 /st 07:00 /ru SYSTEM /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Scripts\Get-AccountAudit.ps1"
+Set-ScheduledTask -TaskName "Monthly Account Audit" -Principal (New-ScheduledTaskPrincipal -UserId 'HOMELAB\svc-audit$' -LogonType Password)
+```
+
+`-LogonType Password` looks odd since no password is given, but for a gMSA it tells Task Scheduler to retrieve the managed password from Active Directory itself. I then ran the task manually instead of waiting until December:
+
+![Task test run and file owner](screenshots/entry29-12-task-test-run-and-owner.png)
+
+LastTaskResult 0 means success, and the next run is scheduled for December 1 at 7:00 AM. The clearest proof is the owner of the new report file: `HOMELAB\svc-audit$`. The gMSA itself created that file, using a password nobody knows. The October report, created by hand, is owned by the Administrators group.
+
+### Step 8: Proving the Account Is Limited
+
+Showing that the task works proves only half the point. Least privilege also means proving the account **can't** do things beyond its job. I ran a temporary test task as svc-audit that tried three things it shouldn't be able to do: change a user in Active Directory, create a file in `C:\Scripts`, and add itself to Domain Admins. The test created a new file rather than touching my real scripts, so nothing was at risk even if a test unexpectedly succeeded.
+
+![gMSA privilege test](screenshots/entry29-13-gmsa-privilege-test-denied.png)
+
+All three were denied: "Insufficient access rights" for both Active Directory changes, and "Access to the path is denied" for the scripts folder, which also confirmed the lockdown from Step 5. If svc-audit's credentials were ever compromised, an attacker would gain a report writer, not a domain admin. I deleted the temporary test task and files afterwards.
+
+### Lessons Learned
+
+The biggest lesson was that least privilege has to be proven, not assumed. Creating the account, granting permissions and seeing the task succeed only showed that svc-audit could do its job; the denied tests are what showed it couldn't do anything else.
+
+I also saw how much hides in defaults. Every folder under `C:\` silently inherited Modify for all authenticated users, which made my most powerful scripts editable by anyone, and I only noticed because I read the full permission listing instead of just the line I had added.
+
+Several problems in this entry looked like one thing and were another. An error blaming password complexity was really the minimum password age, and a Group Policy setting that looked configured wasn't yet applied. In each case, checking the actual state rather than the message or the editor found the real cause.
+
+Finally, my own lab showed why break-glass accounts need special handling. The account meant for emergencies had expired weeks earlier without anyone noticing, which is exactly the situation it exists to prevent.
+
+### Next Steps
+
+The scheduled task can only run while the VM is on, and I deallocate it between sessions to save money, so the next step is either aligning a session with the first of the month or adding a "run on start if missed" setting to the task. The Wazuh trial also becomes available again on November 15, which will bring live SIEM monitoring back into the lab for Entry 30.
