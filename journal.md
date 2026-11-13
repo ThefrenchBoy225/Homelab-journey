@@ -1751,3 +1751,40 @@ Finally, my own lab showed why break-glass accounts need special handling. The a
 ### Next Steps
 
 The scheduled task can only run while the VM is on, and I deallocate it between sessions to save money, so the next step is either aligning a session with the first of the month or adding a "run on start if missed" setting to the task. The Wazuh trial also becomes available again on November 15, which will bring live SIEM monitoring back into the lab for Entry 30.
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Update – Nov 13, 2026: Making the audit survive missed runs
+
+**Problem:** ad-dc-01 is deallocated between lab sessions to control Azure costs, so it is usually powered off on the 1st of the month at 07:00. By default, Task Scheduler silently skips a run if the machine is off at the trigger time, meaning the Monthly Account Audit would rarely actually run.
+
+**Fix:** enabled `StartWhenAvailable` ("Run task as soon as possible after a scheduled start is missed"). A missed run now starts about 10 minutes after the next boot.
+
+**Troubleshooting:** the usual approach, `Set-ScheduledTask -InputObject $t`, failed with `The parameter is incorrect (0x80070057)`. The ScheduledTasks PowerShell cmdlets have no monthly trigger type, so they can't write the task's `ScheduleByMonth` trigger back when the whole task object is passed in. The failed call changed nothing. Passing only the modified settings worked:
+
+    $t = Get-ScheduledTask -TaskName "Monthly Account Audit"
+    $t.Settings.StartWhenAvailable = $true
+    Set-ScheduledTask -TaskName "Monthly Account Audit" -Settings $t.Settings
+
+![Set-ScheduledTask error and successful -Settings fix](screenshots/entry29-14-startwhenavailable-fix.png)
+
+**Verification:** exported the task XML to confirm that only the intended setting changed:
+- `<StartWhenAvailable>true</StartWhenAvailable>` is present
+- The monthly trigger is intact (`ScheduleByMonth`, all 12 months, day 1, 07:00)
+- The action is unchanged (`Get-AccountAudit.ps1`)
+- The principal is still the gMSA: LogonType `Password`, with the UserId shown as a SID that matches `Get-ADServiceAccount svc-audit` (ending in -9601)
+
+![Task XML showing StartWhenAvailable and the monthly trigger](screenshots/entry29-15-task-xml.png)
+![gMSA SID matching the task principal](screenshots/entry29-16-gmsa-sid-match.png)
+
+**Takeaway:** when changing a scheduled task, change only the part you need and then verify the full definition, not just the setting you touched. A "successful" change that silently drops a trigger or a service-account binding would be worse than the original problem.
