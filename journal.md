@@ -1788,3 +1788,239 @@ The scheduled task can only run while the VM is on, and I deallocate it between 
 ![gMSA SID matching the task principal](screenshots/entry29-16-gmsa-sid-match.png)
 
 **Takeaway:** when changing a scheduled task, change only the part you need and then verify the full definition, not just the setting you touched. A "successful" change that silently drops a trigger or a service-account binding would be worse than the original problem.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 30: Connecting the Domain Controller to Wazuh and Investigating Real Detections
+
+**Date:** November 19, 2026
+**Tools:** Wazuh Cloud (trial, Canada Central), Wazuh agent 4.14.9, Windows Server 2022 domain controller (ad-dc-01, Azure), PowerShell
+
+### Objective
+
+Bring Wazuh back into the lab, this time monitoring the Active Directory domain controller instead of a Linux VM. Then generate real security events on the DC and check what Wazuh detects, how it labels each event, and which MITRE ATT&CK techniques it maps them to.
+
+### 1. Wazuh Cloud environment
+
+I created a new Wazuh Cloud trial environment named `homelab-ad` in the Canada Central region, the same region as the Azure VM. The Small profile (up to 100 agents) is more than enough for one domain controller.
+
+![Creating the Wazuh Cloud environment](screenshots/entry30-01-wazuh-create-environment.png)
+![Environment ready](screenshots/entry30-02-wazuh-environment-ready.png)
+
+### 2. Deploying the agent on ad-dc-01
+
+From **Agents → Deploy new agent**, I chose Windows MSI, kept the server address `2l28gipm22zp.cloud.wazuh.com`, and set the agent name to `ad-dc-01` so it matches the server name used throughout this journal. The wizard generated a one-line PowerShell command that downloads the MSI and installs it with the manager address and registration password. I ran it in an elevated PowerShell on the DC, then started the service.
+
+```powershell
+NET START Wazuh
+Get-Service WazuhSvc
+```
+
+![Deploy new agent wizard](screenshots/entry30-03-deploy-agent-wizard.png)
+![Agent installed and WazuhSvc running (registration password redacted)](screenshots/entry30-05-agent-install-service-running.png)
+
+The agent connected outbound to Wazuh Cloud with no Azure network changes needed. Within a minute, ad-dc-01 appeared as **agent 001, active**, running Windows Server 2022 Datacenter Azure Edition.
+
+![ad-dc-01 active in Wazuh](screenshots/entry30-04-agent-active.png)
+
+**Security note:** the install command includes `WAZUH_REGISTRATION_PASSWORD` in plain text. Anyone with it can enroll their own machine into the environment, so I redacted it from the screenshot. The command also stays in PowerShell's history file, which can be cleared with `Remove-Item (Get-PSReadLineOption).HistorySavePath`.
+
+### 3. Test 1: Brute force and account lockout
+
+I simulated password guessing against the test user jdoe. The Sales-PSO policy locks an account after 3 failed attempts, so I sent 4 wrong passwords directly to the domain from the DC:
+
+```powershell
+Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+$ctx = New-Object System.DirectoryServices.AccountManagement.PrincipalContext('Domain')
+1..4 | ForEach-Object { $ctx.ValidateCredentials('jdoe', "WrongPass$_!") }
+Get-ADUser jdoe -Properties LockedOut | Select Name, LockedOut
+```
+
+All four attempts returned `False`, and `LockedOut` showed `True`.
+
+![PowerShell test commands](screenshots/entry30-13-powershell-test-commands.png)
+
+In **Threat Hunting → Events**, Wazuh detected all of it within seconds:
+
+| Event | What happened | Wazuh rule | Level |
+| --- | --- | --- | --- |
+| 4625 (x4) | Failed logons for jdoe, 12:19:30–12:19:31 | 60122 "Logon Failure – Unknown user or bad password" | 5 |
+| 4740 | jdoe locked out, 12:19:31 | 60115 "User account locked out (multiple login errors)" | 9 |
+
+![4625 failed logons in Wazuh](screenshots/entry30-06-4625-failed-logons.png)
+![4740 lockout in Wazuh](screenshots/entry30-07-4740-lockout.png)
+
+### 4. Analysis: telling a wrong password apart from a locked account
+
+There were 4 failed attempts but the lockout threshold is 3, so the fourth attempt hit an account that was already locked. Wazuh labels all four the same way ("Unknown user or bad password"), so I checked the raw Windows status codes in the event details.
+
+The last attempt shows status **0xc0000234 (account locked)**. It also shows `logonType 3` (network logon, which is how the credential check reached the DC) and `workstationName ad-dc-01`.
+
+![Fourth attempt: status 0xc0000234](screenshots/entry30-08-4625-status-account-locked-detail.png)
+
+My first query on `status:0xc000006a` returned nothing. That was a useful lesson: for a wrong password, Windows writes the general code **0xc000006d** to `status` and the specific reason **0xc000006a** to `subStatus`. For a locked account, the specific code goes straight into `status`. With the right fields, two DQL queries separate the attempts:
+
+```
+data.win.system.eventID:4625 and data.win.eventdata.subStatus:0xc000006a   → 3 hits (wrong password)
+data.win.system.eventID:4625 and data.win.eventdata.status:0xc0000234      → 1 hit (account already locked)
+```
+
+![3 wrong-password attempts](screenshots/entry30-10-query-substatus-bad-password.png)
+![1 attempt on a locked account](screenshots/entry30-11-query-status-account-locked.png)
+
+The timestamps confirm the order: three wrong passwords at 12:19:30.9–31.0, the lockout at 12:19:31, then the fourth attempt at 12:19:31.1, rejected before its password was even checked. **An alert's description is where an investigation starts, not the answer.**
+
+### 5. Reviewing the MITRE mapping
+
+Wazuh maps rule 60122 to **T1531 Account Access Removal** (tactic: Impact). That fits the outcome, since repeated failures locked a legitimate user out. For a series of password guesses, an analyst would also consider **T1110 Brute Force** (tactic: Credential Access). It's worth checking a SIEM's automatic mapping rather than accepting it as-is.
+
+![MITRE mapping for rule 60122](screenshots/entry30-09-4625-mitre-mapping.png)
+
+### 6. Test 2: The help desk unlock (4767)
+
+I unlocked jdoe with `Unlock-ADAccount jdoe`, and Wazuh recorded event **4767** showing **adm-sodeeq** (SID ending -7101) unlocked **jdoe** (SID ending -1601). The SIEM now holds the full story: who was targeted, when the account locked, and which admin restored access.
+
+![4767 unlock by adm-sodeeq](screenshots/entry30-12-4767-unlock-by-admin.png)
+
+There were two 4767 events because I ran the unlock twice (12:32 and 12:54). The lockout duration is 10 minutes, so jdoe's lockout had already expired by itself at about 12:29, before either unlock. Two things follow:
+
+1. Windows logs a 4767 every time an admin runs an unlock, even on an account that isn't locked anymore.
+2. An automatic expiry logs nothing at all.
+
+The real lockout window (12:19:31–12:29:31) only comes from combining the 4740 time with the policy duration.
+
+### 7. Test 3: Scheduled task creation (persistence check)
+
+Attackers often use scheduled tasks for persistence (MITRE T1053.005). I first confirmed that task auditing was enabled. `auditpol` showed "Other Object Access Events" was already set to Success and Failure, so checking before changing anything saved an unnecessary change. Then I created a harmless test task that only echoes a word and was scheduled for the next day:
+
+```powershell
+Register-ScheduledTask -TaskName "Lab-4698-Test" -Action (New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c echo test") -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(1))
+```
+
+Wazuh raised **rule 60228 "A scheduled task was created"** (level 4), mapped to **T1053 Scheduled Task/Job** (Execution, Persistence, Privilege Escalation). The event shows adm-sodeeq created it on ad-dc-01.homelab.local, and the full task XML is included in `taskContent`.
+
+![4698 task created](screenshots/entry30-14-4698-task-created.png)
+![Subject: adm-sodeeq](screenshots/entry30-15-4698-subject-adm-sodeeq.png)
+![MITRE T1053 mapping](screenshots/entry30-16-4698-mitre-t1053.png)
+
+Level 4 is low because a harmless admin task and an attacker's persistence task produce the same alert. To tell them apart, an analyst checks **who** created the task (a known admin here) and **what it runs** (`cmd.exe /c echo test`). A task created by an unknown account, or one running something from AppData or Temp, would need a much closer look.
+
+### Takeaways
+
+1. A domain controller can be connected to a cloud SIEM in minutes, with no inbound firewall changes.
+2. Wazuh detected failed logons, the lockout, the admin unlock, and scheduled task creation out of the box.
+3. Raw status codes (`status` and `subStatus`) separate a wrong password from an attempt on an already-locked account, even when the alert text is identical.
+4. Automatic MITRE mappings are a starting point and should be reviewed.
+5. ad-dc-01 logs in UTC while the Wazuh dashboard shows Toronto time, so timestamps need converting when matching up evidence from the two sources.
+
+---
+
+## Entry 31: Finding a Detection Gap and Writing a Custom Wazuh Rule
+
+**Date:** November 19, 2026
+**Tools:** Wazuh Cloud (rules engine), Windows Event Log, PowerShell
+
+### Objective
+
+After Entry 30 showed Wazuh detecting scheduled task **creation**, I deleted the test task and expected an alert for **deletion**. None appeared. This entry investigates why, and closes the gap with a custom detection rule.
+
+### 1. The missing alert
+
+I removed the test task with `Unregister-ScheduledTask -TaskName "Lab-4698-Test" -Confirm:$false` and searched Wazuh for `data.win.system.eventID:4699`. The search returned **no results**.
+
+![No 4699 alert in Wazuh](screenshots/entry31-01-4699-no-alert-in-wazuh.png)
+
+### 2. Checking the host
+
+Before concluding anything, I checked the domain controller itself:
+
+```powershell
+Get-ScheduledTask -TaskName "Lab-4698-Test" -ErrorAction SilentlyContinue
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4699} -MaxEvents 1 | Format-List TimeCreated, Message
+```
+
+The task was gone, and Windows **had** logged **4699 "A scheduled task was deleted"** for `\Lab-4698-Test`, with adm-sodeeq as the subject. (The server shows 6:06 PM because it runs on UTC. That's 1:06 PM in Toronto.)
+
+![4699 logged on the DC](screenshots/entry31-02-4699-logged-on-host.png)
+
+So the deletion happened and was logged, but Wazuh never turned it into an alert. **An event missing from the SIEM doesn't prove it didn't happen on the host.**
+
+### 3. Confirming it's a rule gap
+
+Wazuh's Threat Hunting view only shows **alerts**, meaning events that matched a rule at level 3 or higher. Searching the ruleset by event ID didn't work, because rules are named by description, not by Windows event ID (a search for "4699" only matched an unrelated FortiMail rule, 44699). Searching for **"scheduled task"** returned only one rule: **60228, "A scheduled task was created."** There was no rule for deletion.
+
+![Only a creation rule exists](screenshots/entry31-03-rules-search-scheduled-task.png)
+
+This matters because attackers sometimes delete their scheduled tasks after use to cover their tracks.
+
+### 4. Learning the rule structure
+
+Before writing anything, I opened rule 60228 to see how Wazuh builds Windows event rules. It uses parent rule **if_sid 60103** (Windows Security events), matches the field **win.system.eventID** with the pattern **^4698$**, and sets the option **no_full_log**.
+
+![Rule 60228 structure](screenshots/entry31-04-rule-60228-structure.png)
+
+### 5. Writing the custom rule
+
+In **Server management → Rules → Custom rules → local_rules.xml**, I added:
+
+```xml
+<group name="windows,windows_security,local,">
+  <rule id="100100" level="8">
+    <if_sid>60103</if_sid>
+    <field name="win.system.eventID">^4699$</field>
+    <options>no_full_log</options>
+    <description>Scheduled task deleted: $(win.eventdata.taskName) by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1070</id>
+    </mitre>
+  </rule>
+</group>
+```
+
+Design choices:
+
+- **ID 100100**: custom rules use 100000 and above so they never clash with Wazuh's built-in rules.
+- **Same parent and field as 60228**, but matching 4699.
+- **Level 8**: deleting a task on a domain controller is rarer and more suspicious than creating one (60228 is level 4).
+- **Dynamic description**: the task name and the account appear directly in the alert, so the analyst doesn't have to open the event to triage it.
+- **T1070 Indicator Removal**: the MITRE technique for an attacker cleaning up after themselves.
+
+I saved the file and restarted the Wazuh manager to load the rule.
+
+### 6. Testing the rule
+
+I created and deleted a fresh test task:
+
+```powershell
+Register-ScheduledTask -TaskName "Lab-4699-Test" -Action (New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c echo test") -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(1))
+Unregister-ScheduledTask -TaskName "Lab-4699-Test" -Confirm:$false
+```
+
+Searching `rule.id:100100` returned the alert: **"Scheduled task deleted: \Lab-4699-Test by adm-sodeeq"**, level 8. (The double backslash in the dashboard is Wazuh escaping the backslash in stored data.)
+
+![Custom rule 100100 firing](screenshots/entry31-05-custom-rule-100100-fired.png)
+
+The rule file is saved in this repo at [`detections/local_rules.xml`](detections/local_rules.xml), so it can be loaded into any future Wazuh environment.
+
+### Takeaways
+
+1. A SIEM only alerts on what its rules cover. Default rulesets have gaps, and it's the analyst's job to find them.
+2. When an expected alert is missing, check the source (`Get-WinEvent`) before deciding the event never happened.
+3. The quickest way to write a correct rule is to copy the structure of an existing, working one.
+4. A detection isn't finished until you've tested that it actually fires.
