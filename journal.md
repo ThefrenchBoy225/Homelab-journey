@@ -2024,3 +2024,194 @@ The rule file is saved in this repo at [`detections/local_rules.xml`](detections
 2. When an expected alert is missing, check the source (`Get-WinEvent`) before deciding the event never happened.
 3. The quickest way to write a correct rule is to copy the structure of an existing, working one.
 4. A detection isn't finished until you've tested that it actually fires.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 32: Cloud Security Posture Check and Closing Internet-Exposed RDP
+
+**Date:** November 23–24, 2026
+**Tools:** Microsoft Defender for Cloud (Foundational CSPM), Azure Network Security Groups, Azure Network Watcher (IP flow verify)
+
+### Objective
+
+With the Wazuh trial ended, I turned to Microsoft's own security tooling. The goal was to check the security posture of my Azure environment and the ad-dc-01 domain controller, fix what mattered, and prove the fix worked.
+
+### 1. Defender for Cloud: the free tier
+
+In **Defender for Cloud → Environment settings**, my subscription showed **0/0 paid plans**. On the Defender plans page, **Foundational CSPM** (the free posture tier) was **On** with full monitoring coverage, and every paid plan was **Off**.
+
+![Defender for Cloud environment settings](screenshots/entry32-01-defender-environment-settings.png)
+![Foundational CSPM on, paid plans off](screenshots/entry32-02-foundational-cspm-on.png)
+
+The subscription-wide Security posture page kept loading without ever finishing, so I checked the VM directly instead (**ad-dc-01 → Microsoft Defender for Cloud**). It showed **0 recommendations and 0 security alerts**.
+
+![ad-dc-01 showing 0 recommendations](screenshots/entry32-03-vm-defender-0-recommendations.png)
+
+Zero recommendations on a domain controller looked too good to be true, so I didn't take it at face value and checked the basics by hand.
+
+### 2. The finding: RDP open to the whole internet
+
+Under **ad-dc-01 → Networking → Network settings**, the inbound rule **RDP** (priority 300, TCP 3389) had **Source = Any**, and Azure flagged it with a ⚠️ icon. The domain controller's login screen was reachable from anywhere on the internet. This also explains the outside failed logons I investigated back in Entry 24.
+
+![RDP rule with Source Any](screenshots/entry32-04-nsg-rdp-source-any.png)
+
+Opening the rule showed Azure's own warning: *"RDP port 3389 is exposed to the Internet. This is only recommended for testing."*
+
+![Azure warning on the RDP rule](screenshots/entry32-05-rdp-exposed-warning.png)
+
+### 3. The fix
+
+I changed the rule's **Source** from **Any** to **My IP address**, so only my home public IP is allowed. I kept the port, protocol, action, and priority the same, and saved. The ⚠️ disappeared.
+
+![Source field before the change](screenshots/entry32-06-rdp-rule-source-field.png)
+![RDP rule restricted to my IP, warning gone](screenshots/entry32-07-rdp-rule-restricted.png)
+
+Before making the change, I confirmed I had a way back in if I locked myself out. **Azure Run Command** works no matter what the NSG allows, and I'd already used it to recover access in Entries 24 and 29. I also reconnected over RDP straight away to confirm my own access still worked.
+
+### 4. Proving the fix with IP flow verify
+
+Changing a rule isn't the same as proving it works. I used **Network Watcher → IP flow verify** (VM ad-dc-01, NIC ad-dc-01584, TCP, inbound, local port 3389) to test two remote addresses:
+
+| Remote IP | Result | Rule that decided |
+| --- | --- | --- |
+| `8.8.8.8` (standing in for any internet host) | **Access denied** | DenyAllInBound |
+| My home public IP | **Access allowed** | RDP |
+
+![Internet host denied](screenshots/entry32-08-ipflow-internet-denied.png)
+![My IP allowed (IP redacted)](screenshots/entry32-09-ipflow-my-ip-allowed.png)
+
+### 5. What the free tool showed a day later
+
+About 24 hours later, the VM's Defender page still showed **0 recommendations**. The Defender for Cloud overview showed **0 assessed resources**, so the free tier hadn't actually assessed the VM at all. Most server-level checks (updates, endpoint protection, vulnerability scanning) belong to the paid Defender for Servers plan.
+
+![VM Defender page the next day](screenshots/entry32-10-vm-defender-next-day.png)
+![Overview: 0 assessed resources](screenshots/entry32-11-defender-overview-0-assessed.png)
+
+### Takeaways
+
+1. **"0 recommendations" doesn't mean "secure".** Here it meant "not assessed". The real risk on this server was found by a manual check, not the free tool.
+2. **Plan for lockout before tightening access.** Having a recovery path (Azure Run Command) is what made the change safe to make.
+3. **A change isn't done until it's tested.** IP flow verify proved the rule blocks everyone except me, without needing a second network.
+4. Home ISPs change public IPs from time to time. If RDP stops working, update the rule's source rather than reopening it to Any.
+
+---
+
+## Entry 33: AD Recycle Bin: Restoring a Deleted User and Closing an Audit Gap
+
+**Date:** November 23–24, 2026
+**Tools:** Active Directory PowerShell module, Windows Security event log, auditpol
+
+### Objective
+
+"An account was deleted by mistake, get it back" is a classic help desk and sysadmin request. The goal was to enable the AD Recycle Bin, delete a realistic user, restore them with everything intact, and check what the domain's audit logs actually recorded.
+
+### 1. Enabling the Recycle Bin
+
+The Recycle Bin was off (`EnabledScopes {}`). I enabled it for the forest, and Windows warned that this is **irreversible**. That's standard practice, but worth knowing before you run it.
+
+```powershell
+Get-ADOptionalFeature -Filter 'Name -like "Recycle Bin Feature"' | Select Name, EnabledScopes
+Enable-ADOptionalFeature -Identity 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target 'homelab.local' -Confirm:$false
+```
+
+![Recycle Bin enabled with the irreversible warning](screenshots/entry33-01-enable-recycle-bin.png)
+
+### 2. Creating a test user, and a gotcha
+
+I created **Rita Brown** (rbrown) in the Sales OU with a title, department, and description, and added her to **Sales Team**. `New-ADUser` failed with *"The password does not meet the length, complexity, or history requirement"*, but the next command, `Add-ADGroupMember`, **didn't fail**. That meant the account existed: New-ADUser creates the account first and sets the password second, so the failure left a **disabled account with no password**.
+
+![New-ADUser password error](screenshots/entry33-02-newaduser-password-error.png)
+![Account exists but Enabled: False](screenshots/entry33-03-account-created-disabled.png)
+
+I set a compliant password with `Set-ADAccountPassword -Reset`, ran `Enable-ADAccount`, and recorded a "before" snapshot, including the account's permanent identifiers:
+
+- **ObjectGUID:** e0682b9d-4ee4-4947-9db7-42272139002f
+- **ObjectSID:** S-1-5-21-…-11601
+
+![Rita's before snapshot](screenshots/entry33-04-rita-before-snapshot.png)
+
+### 3. Deleting and restoring
+
+After `Remove-ADUser rbrown`, a normal lookup failed (*"Cannot find an object with identity"*), and Rita dropped out of the Sales Team member list. Searching deleted objects showed she was still there:
+
+```powershell
+Get-ADObject -Filter 'SamAccountName -eq "rbrown"' -IncludeDeletedObjects -Properties * | Format-List Name, Deleted, LastKnownParent, ObjectGUID, objectSid, Title, Department
+```
+
+She was renamed `Rita Brown DEL:e0682b9d…`, marked **Deleted: True**, with **LastKnownParent = OU=Sales**, and her GUID, SID, title, and department were all still there.
+
+![Rita in the Recycle Bin](screenshots/entry33-05-deleted-object-in-recycle-bin.png)
+
+One command restored her:
+
+```powershell
+Get-ADObject -Filter 'SamAccountName -eq "rbrown"' -IncludeDeletedObjects | Restore-ADObject
+```
+
+She came back **enabled**, with the same title, department, description, and **Sales Team membership**, and the **same GUID and SID**.
+
+![Restored with the same SID and group membership](screenshots/entry33-06-restore-same-sid-and-group.png)
+
+The SID is what matters most. Anything that refers to Rita by SID, such as folder permissions or group-based access, works again immediately. Recreating the account by hand would give her a new SID, and every permission would have to be set up again.
+
+### 4. The audit gap
+
+I then checked what the domain had recorded. Only **4726 "A user account was deleted"** appeared. There was no 4729 for her removal from Sales Team, and **nothing for the restore**: no 5141 (directory object deleted) and no 5138 (undeleted).
+
+![Only 4726 logged](screenshots/entry33-07-only-4726-logged.png)
+
+I turned on **Directory Service Changes** auditing with `auditpol` and repeated the test. There was still no 5141.
+
+![auditpol enabled, still no 5141](screenshots/entry33-08-auditpol-no-5141.png)
+
+The reason: for AD objects, the audit category is only half of it. The objects also need an **auditing entry (a SACL)** saying what to record. The Sales OU's SACL only covered certain property changes (two default "Everyone: WriteProperty" entries) and **nothing for deletes**. I added one with PowerShell. My first attempt failed with an "ambiguous overloads" error, which I fixed by giving each value its exact type:
+
+```powershell
+$sid    = [System.Security.Principal.SecurityIdentifier]"S-1-1-0"
+$rights = [System.DirectoryServices.ActiveDirectoryRights]"Delete,DeleteTree,WriteProperty"
+$flags  = [System.Security.AccessControl.AuditFlags]"Success"
+$inh    = [System.DirectoryServices.ActiveDirectorySecurityInheritance]"All"
+$rule   = New-Object System.DirectoryServices.ActiveDirectoryAuditRule($sid, $rights, $flags, $inh)
+$acl    = Get-Acl "AD:\OU=Sales,DC=homelab,DC=local" -Audit
+$acl.AddAuditRule($rule)
+Set-Acl "AD:\OU=Sales,DC=homelab,DC=local" $acl
+```
+
+![Audit rule added to the Sales OU](screenshots/entry33-09-sacl-added.png)
+
+### 5. Proving the fix
+
+Deleting Rita again now produced **5141 "A directory service object was deleted"** alongside the 4726:
+
+![5141 now logged](screenshots/entry33-10-5141-logged.png)
+
+The 5141 carries much more detail than 4726: **who** (adm-sodeeq), **what** (`CN=Rita Brown,OU=Sales,DC=homelab,DC=local`, class user), the object's **GUID** (matching the before snapshot), and a correlation ID.
+
+![5141 event detail](screenshots/entry33-11-5141-event-detail.png)
+
+The next day I confirmed Rita was still restored and enabled, and that the Directory Service Changes audit setting had survived a VM restart and Group Policy refresh.
+
+![Next-day checks](screenshots/entry33-12-next-day-checks.png)
+
+**Still open:** the restore itself (5138) is still not logged. My best explanation is that an undelete is checked against auditing on the deleted object or the Deleted Objects container rather than the Sales OU. I'll revisit it once Microsoft Sentinel is connected.
+
+### Takeaways
+
+1. **The Recycle Bin turns a deleted account into a one-command fix**, keeping the SID, attributes, and group memberships.
+2. **An error doesn't always mean nothing happened.** New-ADUser failed but still created a disabled account, the same lesson as Entry 26's script that printed success after failing.
+3. **AD auditing needs two pieces**: the audit policy category *and* a SACL on the objects. With only the category on, deletions went unrecorded at the directory level.
+4. **Check settings persist.** On a domain controller, Group Policy can overwrite local audit settings, so I confirmed it held the next day.
+
