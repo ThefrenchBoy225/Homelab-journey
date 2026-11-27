@@ -2215,3 +2215,130 @@ The next day I confirmed Rita was still restored and enabled, and that the Direc
 3. **AD auditing needs two pieces**: the audit policy category *and* a SACL on the objects. With only the category on, deletions went unrecorded at the directory level.
 4. **Check settings persist.** On a domain controller, Group Policy can overwrite local audit settings, so I confirmed it held the next day.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Entry 34: Microsoft Defender for Endpoint on the Domain Controller: Onboarding, a Test Detection, and Triage
+
+**Date:** November 24–27, 2026
+**Tools:** Microsoft Defender for Cloud (Defender for Servers Plan 2, 30-day trial), Microsoft Defender for Endpoint, Microsoft Defender portal, PowerShell
+
+### Objective
+
+Entry 32 showed that the free Defender for Cloud tier never actually assessed ad-dc-01. This entry turns on real endpoint protection for the domain controller, proves detection works end to end with Microsoft's official test, and handles the resulting alert the way a SOC analyst would.
+
+### 1. Enabling Defender for Servers Plan 2
+
+In **Defender for Cloud → Environment settings → Azure subscription 1**, I switched **Servers** to **On** with **Plan 2** (1 server). Every other plan stayed Off. I declined a pop-up for Defender CSPM, a separate paid posture plan that adds little for a one-VM lab. The trial started November 24, and I set a reminder to turn it off before day 30.
+
+![Servers Plan 2 enabled](screenshots/entry34-01-defender-servers-plan2-on.png)
+
+Under the plan's settings, **Endpoint protection** (Microsoft Defender for Endpoint), **Vulnerability assessment**, and **Agentless scanning** were all On. The legacy Log Analytics agent showed as deprecated and Off, which is expected.
+
+![Endpoint protection component on](screenshots/entry34-02-endpoint-protection-on.png)
+
+### 2. Waiting on onboarding, and checking the prerequisites
+
+About 35 minutes later, **Extensions + applications** on the VM was still empty, and on the server the **Sense** service (Defender for Endpoint, built into Windows Server 2022) was **Stopped**. That's the "before" picture.
+
+![No extensions yet](screenshots/entry34-03-no-extensions-yet.png)
+![Sense stopped before onboarding](screenshots/entry34-04-sense-stopped-before.png)
+
+Rather than assume something was broken, I checked the prerequisite: extensions can only install through the Azure VM agent, which showed **Agent status: Ready**. Nothing was blocking the install. It was just waiting on Defender for Cloud's schedule.
+
+![VM agent Ready](screenshots/entry34-05-vm-agent-ready.png)
+
+The extension only deploys while the VM is running, and I deallocate ad-dc-01 between sessions to control cost, so onboarding took several days. On November 27 the **MDE.Windows** extension showed **Provisioning succeeded**, and **Sense** was **Running**.
+
+![MDE.Windows extension provisioned](screenshots/entry34-06-mde-extension-provisioned.png)
+![Sense running after onboarding](screenshots/entry34-07-sense-running-after.png)
+
+### 3. Reaching the Defender portal
+
+Opening security.microsoft.com with my personal Microsoft account failed with "Selected user account does not exist in tenant 'Microsoft Services'". The account was being sent to Microsoft's consumer directory instead of my lab tenant. Adding the lab tenant's ID to the URL fixed it:
+
+```
+https://security.microsoft.com/?tid=<lab tenant ID from Microsoft Entra ID → Overview>
+```
+
+![Defender portal in the lab tenant](screenshots/entry34-08-defender-portal-tenant-signin.png)
+
+### 4. Proving detection with Microsoft's test
+
+Microsoft provides a harmless test command for confirming a device is reporting. It downloads nothing (it targets 127.0.0.1) and runs nothing, but its command line looks suspicious enough to trigger a detection. From an elevated Command Prompt on ad-dc-01:
+
+```cmd
+md C:\test-MDATP-test
+powershell.exe -NoExit -ExecutionPolicy Bypass -WindowStyle Hidden $ErrorActionPreference = 'silentlycontinue';(New-Object System.Net.WebClient).DownloadFile('http://127.0.0.1/1.exe', 'C:\\test-MDATP-test\\invoice.exe');Start-Process 'C:\\test-MDATP-test\\invoice.exe'
+```
+
+About 20 minutes later, the Defender portal showed **[Test Alert] Suspicious Powershell commandline**: category **Execution**, detection source **EDR**, severity **Informational**.
+
+![Test alert fired](screenshots/entry34-09-test-alert-fired.png)
+
+### 5. Investigating the alert
+
+The evidence listed the device and the processes involved, each marked Suspicious: two cmd.exe processes (PIDs 4516 and 1764) and two powershell.exe processes (5312 and 7660).
+
+![Alert evidence](screenshots/entry34-10-alert-evidence.png)
+
+The **process tree** showed the full chain: winlogon.exe → userinit.exe → explorer.exe (my RDP sign-in at 3:55 PM) → **cmd.exe [4516]** at 4:06:59 PM → **powershell.exe [5312]** at 4:07:28 PM, with the full `-NoExit -ExecutionPolicy Bypass -WindowStyle Hidden ...` command line, then the alert. The "Remote execution" tags reflect the RDP session. The second cmd.exe (1764, at 4:17 PM) was a separate prompt I opened later to check the test folder, which explained the extra processes in the evidence list. The test itself only ran once.
+
+![Process tree](screenshots/entry34-11-process-tree.png)
+
+### 6. Closing the alert properly
+
+I resolved the alert with a classification and a comment recording who ran the test, why, and the process chain. Closing alerts this way leaves an audit trail for the next analyst.
+
+- **Status:** Resolved
+- **Classification:** Informational, expected activity → Security testing
+- **Comment:** Microsoft Defender for Endpoint detection test run by adm-sodeeq to validate onboarding of ad-dc-01. Process tree confirmed: cmd.exe (4516) → powershell.exe (5312). Expected activity, no further action.
+
+![Manage alert with classification](screenshots/entry34-12-manage-alert-classification.png)
+![Alert resolved](screenshots/entry34-13-alert-resolved.png)
+
+### 7. What Defender sees now
+
+The device page shows ad-dc-01 **Onboarded** with **no active alerts**. It also shows **Exposure level: High**, with **53 security recommendations** and **2,292 discovered vulnerabilities** (93 critical, 1,622 high).
+
+![Device onboarded, exposure High](screenshots/entry34-14-device-onboarded-exposure-high.png)
+
+The vulnerability list is dominated by **Microsoft Windows Server** CVEs published in September and October 2026. Most likely the server is missing recent cumulative updates, and each missing update counts as hundreds of CVEs. That's a direct result of the VM being off most of the time. It's the opposite of Entry 32's "0 recommendations": once a tool could look inside the operating system, it found real exposure.
+
+![Vulnerabilities list](screenshots/entry34-15-vulnerabilities-list.png)
+
+### 8. Cleanup
+
+The test used `-NoExit`, so I stopped the leftover hidden PowerShell processes and removed the test folder:
+
+```powershell
+Stop-Process -Id 5312, 7660 -ErrorAction SilentlyContinue
+Remove-Item C:\test-MDATP-test -Recurse -Force
+```
+
+![Cleanup](screenshots/entry34-16-cleanup.png)
+
+### Takeaways
+
+1. **Check prerequisites before assuming failure.** The VM agent was Ready, and the delay was only schedule plus deallocated time.
+2. **The process tree is the story.** Parent-child processes and full command lines show how something ran, not just that it ran.
+3. **Close alerts with a classification and a reason.** "Resolved, security testing, here's who and why" is useful to the next analyst; a bare "Resolved" isn't.
+4. **Deeper visibility finds real risk.** The free tier saw nothing; endpoint-level assessment found 2,292 vulnerabilities, mostly missing patches.
+
+**Next:** Entry 35 will use the vulnerability list and recommendations to patch the server and measure the exposure level coming down.
